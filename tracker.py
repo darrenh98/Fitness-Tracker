@@ -90,13 +90,24 @@ def format_pace(decimal_min):
 
 def parse_time_input(time_str):
     try:
-        if ":" in time_str:
-            parts = time_str.split(":")
-            return float(parts[0]) + float(parts[1])/60
-        elif "'" in time_str:
-            parts = time_str.split("'")
-            return float(parts[0]) + float(parts[1].replace('"', ''))/60
-        return float(time_str)
+        # Clean string
+        clean = time_str.strip()
+        if not clean:
+            return 0.0
+            
+        parts = clean.split(":")
+        
+        # Format: hh:mm:ss
+        if len(parts) == 3:
+            return float(parts[0]) * 60 + float(parts[1]) + float(parts[2]) / 60
+        # Format: mm:ss
+        elif len(parts) == 2:
+            return float(parts[0]) + float(parts[1]) / 60
+        # Format: decimal minutes or raw number
+        elif len(parts) == 1:
+            return float(parts[0])
+            
+        return 0.0
     except:
         return 0.0
 
@@ -172,16 +183,62 @@ if selected_tab == "Plan":
 elif selected_tab == "Field (Runs)":
     st.header("👟 Field Activities")
     
-    # Full width logging form
-    with st.container(border=True):
-        st.markdown("### ➕ Log Activity")
+    # Prepare data for dashboard (always load data first)
+    runs_df = pd.DataFrame(st.session_state.data['runs'])
+    
+    # --- DASHBOARD SECTION (Always Visible) ---
+    st.subheader("📊 Dashboard")
+    
+    # Filter Logic
+    filter_type = st.radio("Activity Filter:", ["All", "Run", "Walk", "Ultimate"], horizontal=True, label_visibility="visible")
+    
+    # Filter Data based on selection
+    if not runs_df.empty:
+        if filter_type != "All":
+            filtered_df = runs_df[runs_df['type'] == filter_type]
+        else:
+            filtered_df = runs_df
+    else:
+        # Empty dataframe structure if no data exists
+        filtered_df = pd.DataFrame(columns=['distance', 'duration', 'avgHr'])
+
+    # Calculations (Defaults to 0 if empty)
+    total_dist = filtered_df['distance'].sum() if not filtered_df.empty else 0
+    total_mins = filtered_df['duration'].sum() if not filtered_df.empty else 0
+    count = len(filtered_df)
+    avg_hr = filtered_df['avgHr'].mean() if not filtered_df.empty and filtered_df['avgHr'].sum() > 0 else 0
+    
+    # Pace Calculation (Time / Distance)
+    if total_dist > 0:
+        avg_pace_val = total_mins / total_dist
+        pace_label = format_pace(avg_pace_val) + " /km"
+    else:
+        pace_label = "-"
+    
+    # Format Time (Decimal mins to HH:MM)
+    t_hours = int(total_mins // 60)
+    t_mins = int(total_mins % 60)
+    time_label = f"{t_hours}h {t_mins}m"
+
+    # Stats Cards
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Total Dist", f"{total_dist:.1f} km")
+    m2.metric("Total Time", time_label)
+    m3.metric("Avg Pace", pace_label)
+    m4.metric("Avg HR", f"{int(avg_hr)} bpm")
+    m5.metric("Count", count)
+
+    st.divider()
+
+    # --- LOGGING FORM (Dropdown/Expander) ---
+    with st.expander("➕ Log Activity", expanded=False):
         with st.form("run_form"):
             # Row 1: Basic Info
             c1, c2, c3, c4 = st.columns(4)
             act_type = c1.selectbox("Type", ["Run", "Walk", "Ultimate"])
             act_date = c2.date_input("Date", datetime.now())
             dist = c3.number_input("Distance (km)", min_value=0.0, step=0.01)
-            dur_str = c4.text_input("Duration (mm:ss)", placeholder="30:00")
+            dur_str = c4.text_input("Duration (hh:mm:ss)", placeholder="01:30:00")
             
             # Row 2: Heart Rate & Zones
             st.caption("Heart Rate Zones (Time in mm:ss)")
@@ -217,61 +274,27 @@ elif selected_tab == "Field (Runs)":
                 st.success("Activity Logged!")
                 st.rerun()
 
-    # Dashboard Stats
-    runs_df = pd.DataFrame(st.session_state.data['runs'])
-    
+    # --- HISTORY TABLE ---
     if not runs_df.empty:
-        st.subheader("📊 Dashboard")
-        
-        # Filter Logic
-        filter_type = st.radio("Activity Filter:", ["All", "Run", "Walk", "Ultimate"], horizontal=True, label_visibility="visible")
-        
-        if filter_type != "All":
-            filtered_df = runs_df[runs_df['type'] == filter_type]
-        else:
-            filtered_df = runs_df
-
-        # Calculations
-        total_dist = filtered_df['distance'].sum()
-        total_mins = filtered_df['duration'].sum()
-        count = len(filtered_df)
-        avg_hr = filtered_df['avgHr'].mean() if not filtered_df.empty else 0
-        
-        # Format Time (Decimal mins to HH:MM)
-        t_hours = int(total_mins // 60)
-        t_mins = int(total_mins % 60)
-        time_label = f"{t_hours}h {t_mins}m"
-
-        # Stats Cards
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Total Distance", f"{total_dist:.1f} km")
-        m2.metric("Total Time", time_label)
-        m3.metric("Avg HR", f"{int(avg_hr)} bpm")
-        m4.metric("Count", count)
-
-        # Data Table
         st.subheader("History")
         
         # Format for display
         display_df = filtered_df.copy()
-        display_df['duration_fmt'] = display_df['duration'].apply(format_pace)
-        
-        # Display Columns
-        display_df = display_df[['date', 'type', 'distance', 'duration_fmt', 'avgHr', 'notes']]
-        display_df.columns = ['Date', 'Type', 'Dist (km)', 'Time', 'HR', 'Notes']
-        
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
-        
-        # Delete functionality
-        with st.expander("Manage Data"):
-            run_to_delete = st.selectbox("Select entry to delete", options=runs_df['id'], format_func=lambda x: f"{x} (ID)")
-            if st.button("Delete Entry"):
-                st.session_state.data['runs'] = [r for r in st.session_state.data['runs'] if r['id'] != run_to_delete]
-                persist()
-                st.rerun()
-
-    else:
-        st.info("No activities logged yet.")
+        if not display_df.empty:
+            display_df['duration_fmt'] = display_df['duration'].apply(format_pace)
+            # Display Columns
+            display_df = display_df[['date', 'type', 'distance', 'duration_fmt', 'avgHr', 'notes']]
+            display_df.columns = ['Date', 'Type', 'Dist (km)', 'Time', 'HR', 'Notes']
+            
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
+            
+            # Delete functionality
+            with st.expander("Manage Data"):
+                run_to_delete = st.selectbox("Select entry to delete", options=runs_df['id'], format_func=lambda x: f"{x} (ID)")
+                if st.button("Delete Entry"):
+                    st.session_state.data['runs'] = [r for r in st.session_state.data['runs'] if r['id'] != run_to_delete]
+                    persist()
+                    st.rerun()
 
 # --- TAB: GYM ---
 elif selected_tab == "Gym":
