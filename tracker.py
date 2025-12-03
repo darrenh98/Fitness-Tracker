@@ -174,31 +174,32 @@ elif selected_tab == "Field (Runs)":
     with c1:
         st.header("👟 Field Activities")
     with c2:
-        with st.expander("➕ Log Activity"):
-            with st.form("run_form"):
-                act_type = st.selectbox("Type", ["Run", "Walk", "Ultimate"])
-                act_date = st.date_input("Date", datetime.now())
-                c_a, c_b = st.columns(2)
-                dist = c_a.number_input("Distance (km)", min_value=0.0, step=0.01)
-                dur_str = c_b.text_input("Duration (mm:ss or mm.mm)", placeholder="30:00")
-                hr = st.number_input("Avg HR", min_value=0)
-                notes = st.text_input("Notes")
-                
-                submitted = st.form_submit_button("Save Activity")
-                if submitted:
-                    new_run = {
-                        "id": int(time.time()),
-                        "date": str(act_date),
-                        "type": act_type,
-                        "distance": dist,
-                        "duration": parse_time_input(dur_str),
-                        "avgHr": hr,
-                        "notes": notes
-                    }
-                    st.session_state.data['runs'].insert(0, new_run)
-                    persist()
-                    st.success("Activity Logged!")
-                    st.rerun()
+        # Removed expander so form is always visible
+        st.markdown("### ➕ Log Activity")
+        with st.form("run_form"):
+            act_type = st.selectbox("Type", ["Run", "Walk", "Ultimate"])
+            act_date = st.date_input("Date", datetime.now())
+            c_a, c_b = st.columns(2)
+            dist = c_a.number_input("Distance (km)", min_value=0.0, step=0.01)
+            dur_str = c_b.text_input("Duration (mm:ss)", placeholder="30:00")
+            hr = st.number_input("Avg HR", min_value=0)
+            notes = st.text_input("Notes")
+            
+            submitted = st.form_submit_button("Save Activity")
+            if submitted:
+                new_run = {
+                    "id": int(time.time()),
+                    "date": str(act_date),
+                    "type": act_type,
+                    "distance": dist,
+                    "duration": parse_time_input(dur_str),
+                    "avgHr": hr,
+                    "notes": notes
+                }
+                st.session_state.data['runs'].insert(0, new_run)
+                persist()
+                st.success("Activity Logged!")
+                st.rerun()
 
     # Dashboard Stats
     runs_df = pd.DataFrame(st.session_state.data['runs'])
