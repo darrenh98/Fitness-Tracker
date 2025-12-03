@@ -330,8 +330,11 @@ elif selected_tab == "Field (Runs)":
             
             btn_text = "Update Activity" if edit_run_id else "Save Activity"
             if st.form_submit_button(btn_text):
+                # Use millisecond precision for new IDs to avoid duplicates in same second
+                new_id = int(time.time() * 1000)
+                
                 run_obj = {
-                    "id": edit_run_id if edit_run_id else int(time.time()),
+                    "id": edit_run_id if edit_run_id else new_id,
                     "date": str(act_date),
                     "type": act_type,
                     "distance": dist,
@@ -457,10 +460,11 @@ elif selected_tab == "Field (Runs)":
                         # Actions
                         with c_act:
                             b1, b2 = st.columns(2)
-                            if b1.button("✏️", key=f"ed_{row['id']}"):
+                            # Append idx to keys to prevent DuplicateElementKey error if IDs duplicate
+                            if b1.button("✏️", key=f"ed_{row['id']}_{idx}"):
                                 st.session_state.edit_run_id = row['id']
                                 st.rerun()
-                            if b2.button("🗑️", key=f"del_{row['id']}"):
+                            if b2.button("🗑️", key=f"del_{row['id']}_{idx}"):
                                 st.session_state.data['runs'] = [r for r in st.session_state.data['runs'] if r['id'] != row['id']]
                                 persist()
                                 st.rerun()
@@ -803,21 +807,14 @@ elif selected_tab == "Stats":
                  
                  with hc_act:
                     he, hd = st.columns(2)
-                    # For edit/delete we need ID. It's in the row but might be safer to grab directly if index aligns,
-                    # but using ID from row is best.
-                    # We need to map row ID back to session state to delete
-                    pass 
-        
-        # Using session state list directly for action buttons to ensure state stability
-        # But we want to display sorted. So use the dataframe approach but grab ID from row.
-        # Actually, let's stick to the container iteration used in Field tab for consistency
-        # Re-implementing loop correctly with dataframe rows:
-        pass
-
-        # Correct Loop for Stats History
-        for index, row in list_h_df.iterrows():
-             # We need to find the action buttons inside the loop above
-             # Since I can't easily re-open the loop context, I will replace the placeholder above with this logic
-             pass
+                    # Use row['id'] for logic
+                    if he.button("✏️", key=f"edit_h_{row['id']}"):
+                        st.session_state.edit_hlth_id = row['id']
+                        st.rerun()
+                    if hd.button("🗑️", key=f"del_h_{row['id']}"):
+                        st.session_state.data['health_logs'] = [x for x in st.session_state.data['health_logs'] if x['id'] != row['id']]
+                        persist()
+                        st.rerun()
+            
     else:
         st.info("No health stats logged yet.")
