@@ -178,7 +178,7 @@ DEFAULT_DATA = {
     "runs": [],
     "health_logs": [],
     "gym_sessions": [],
-    "nutrition_logs": [],
+    # Removed nutrition_logs
     "routines": [
         {"id": 1, "name": "Leg Day", "exercises": ["Squats", "Split Squats", "Glute Bridges", "Calf Raises"]},
         {"id": 2, "name": "Upper Body", "exercises": ["Bench Press", "Pull Ups", "Overhead Press", "Rows"]}
@@ -366,7 +366,7 @@ def generate_report(start_date, end_date, selected_cats):
 # --- Sidebar Navigation ---
 with st.sidebar:
     st.title(":material/sprint: RunLog Hub")
-    selected_tab = st.radio("Navigate", ["Plan", "Field (Runs)", "Gym", "Nutrition", "Stats", "Share"], label_visibility="collapsed")
+    selected_tab = st.radio("Navigate", ["Plan", "Field (Runs)", "Gym", "Stats", "Share"], label_visibility="collapsed")
     st.divider()
     
     with st.expander("👤 Athlete Profile"):
@@ -861,88 +861,6 @@ elif selected_tab == "Gym":
         if st.button("Go Back"):
             st.session_state.gym_save_dialog = False
             st.rerun()
-
-# --- TAB: NUTRITION ---
-elif selected_tab == "Nutrition":
-    st.header(":material/restaurant: Nutrition Log")
-    c1, c2 = st.columns([1, 2])
-    edit_nut_id = st.session_state.get('edit_nut_id', None)
-    def_nut_date, def_meal, def_cal, def_prot, def_carb, def_fat = datetime.now(), "", 500, 30, 50, 15
-    if edit_nut_id:
-        n_data = next((n for n in st.session_state.data['nutrition_logs'] if n['id'] == edit_nut_id), None)
-        if n_data:
-            def_nut_date = datetime.strptime(n_data['date'], '%Y-%m-%d').date()
-            def_meal = n_data['meal']
-            def_cal = n_data['calories']
-            def_prot = n_data['protein']
-            def_carb = n_data['carbs']
-            def_fat = n_data['fat']
-
-    with c1:
-        lbl = ":material/edit: Edit Meal" if edit_nut_id else "Add Meal"
-        st.subheader(lbl)
-        with st.form("food_form"):
-            f_date = st.date_input("Date", def_nut_date)
-            meal = st.text_input("Meal Name", value=def_meal, placeholder="Chicken Rice")
-            cal = st.number_input("Calories", value=int(def_cal), min_value=0, step=50)
-            prot = st.number_input("Protein (g)", value=int(def_prot), min_value=0, step=1)
-            carbs = st.number_input("Carbs (g)", value=int(def_carb), min_value=0, step=1)
-            fat = st.number_input("Fat (g)", value=int(def_fat), min_value=0, step=1)
-            btn_txt = "Update Meal" if edit_nut_id else "Add Meal"
-            if st.form_submit_button(btn_txt):
-                nut_obj = {"id": edit_nut_id if edit_nut_id else int(time.time()), "date": str(f_date), "meal": meal, "calories": cal, "protein": prot, "carbs": carbs, "fat": fat}
-                if edit_nut_id:
-                     idx = next((i for i, n in enumerate(st.session_state.data['nutrition_logs']) if n['id'] == edit_nut_id), -1)
-                     if idx != -1: st.session_state.data['nutrition_logs'][idx] = nut_obj
-                     st.session_state.edit_nut_id = None
-                     st.success("Meal Updated!")
-                else:
-                    st.session_state.data['nutrition_logs'].insert(0, nut_obj)
-                    st.success("Meal Added!")
-                persist()
-                st.rerun()
-        if edit_nut_id:
-            if st.button("Cancel"):
-                st.session_state.edit_nut_id = None
-                st.rerun()
-    with c2:
-        today_str = str(datetime.now().date())
-        todays_logs = [x for x in st.session_state.data['nutrition_logs'] if x['date'] == today_str]
-        t_cal = sum(x['calories'] for x in todays_logs)
-        t_pro = sum(x['protein'] for x in todays_logs)
-        t_carb = sum(x['carbs'] for x in todays_logs)
-        t_fat = sum(x['fat'] for x in todays_logs)
-        st.subheader("Today's Macros")
-        with st.container(border=True):
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Calories", t_cal)
-            col2.metric("Protein", f"{t_pro}g")
-            col3.metric("Carbs", f"{t_carb}g")
-            col4.metric("Fat", f"{t_fat}g")
-        st.divider()
-        st.subheader("Recent Meals")
-        for n in st.session_state.data['nutrition_logs']:
-             with st.container():
-                 # Mobile optimized cols
-                 nc1, nc2, nc_act = st.columns([2, 4, 1.5])
-                 nc1.markdown(f"**{n['date']}**")
-                 
-                 macro_html = f"""
-                 <div style="line-height:1.2;">
-                    <span style="font-weight:600; color:#334155;">{n['meal']}</span><br>
-                    <span style="font-size:0.85rem; color:#64748b;">{n['calories']} kcal</span> 
-                    <span style="font-size:0.75rem; color:#94a3b8;">(P:{n['protein']} C:{n['carbs']} F:{n['fat']})</span>
-                 </div>
-                 """
-                 nc2.markdown(macro_html, unsafe_allow_html=True)
-                 with nc_act:
-                    if st.button(":material/edit:", key=f"edit_nut_{n['id']}"):
-                        st.session_state.edit_nut_id = n['id']
-                        st.rerun()
-                    if st.button(":material/delete:", key=f"del_nut_{n['id']}"):
-                        st.session_state.data['nutrition_logs'] = [x for x in st.session_state.data['nutrition_logs'] if x['id'] != n['id']]
-                        persist()
-                        st.rerun()
 
 # --- TAB: STATS (HEALTH) ---
 elif selected_tab == "Stats":
