@@ -370,7 +370,7 @@ def generate_report(start_date, end_date, selected_cats):
 # --- Sidebar Navigation ---
 with st.sidebar:
     st.title(":material/sprint: RunLog Hub")
-    selected_tab = st.radio("Navigate", ["Plan", "Field (Runs)", "Gym", "Stats", "Share"], label_visibility="collapsed")
+    selected_tab = st.radio("Navigate", ["Plan", "Field (Runs)", "Gym", "Stats", "Trends", "Share"], label_visibility="collapsed")
     st.divider()
     
     with st.expander("👤 Athlete Profile"):
@@ -1004,6 +1004,81 @@ elif selected_tab == "Stats":
     else:
         st.info("No health stats logged yet.")
 
+# --- TAB: TRENDS ---
+elif selected_tab == "Trends":
+    st.header(":material/trending_up: Progress & Trends")
+    
+    runs_df = pd.DataFrame(st.session_state.data['runs'])
+    if runs_df.empty:
+        st.info("Log some activities to see trends!")
+    else:
+        runs_df['date'] = pd.to_datetime(runs_df['date'])
+        # Avoid division by zero
+        runs_df['pace'] = runs_df.apply(lambda x: x['duration'] / x['distance'] if x['distance'] > 0 else 0, axis=1)
+        
+        with st.container(border=True):
+            st.subheader("Period Comparison")
+            comp_mode = st.selectbox("Compare", ["Week vs Last Week", "Month vs Last Month", "6 Months", "Year vs Last Year"], label_visibility="collapsed")
+            
+            today = datetime.now()
+            
+            if comp_mode == "Week vs Last Week":
+                days = 7
+            elif comp_mode == "Month vs Last Month":
+                days = 30
+            elif comp_mode == "6 Months":
+                days = 180
+            else:
+                days = 365
+                
+            curr_start = today - timedelta(days=days)
+            prev_start = curr_start - timedelta(days=days)
+            
+            curr_df = runs_df[(runs_df['date'] >= curr_start) & (runs_df['date'] <= today)]
+            prev_df = runs_df[(runs_df['date'] >= prev_start) & (runs_df['date'] < curr_start)]
+            
+            def calc_delta(curr, prev):
+                if prev == 0: return 0.0
+                return ((curr - prev) / prev) * 100
+            
+            # Metrics
+            c_dist = curr_df['distance'].sum()
+            p_dist = prev_df['distance'].sum()
+            d_dist = calc_delta(c_dist, p_dist)
+            
+            c_time = curr_df['duration'].sum()
+            p_time = prev_df['duration'].sum()
+            d_time = calc_delta(c_time, p_time)
+            
+            # Pace (lower is better, so we invert delta color logic manually or just show raw change)
+            # Weighted average pace = Total Time / Total Distance
+            c_pace = c_time / c_dist if c_dist > 0 else 0
+            p_pace = p_time / p_dist if p_dist > 0 else 0
+            d_pace = calc_delta(c_pace, p_pace)
+            
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Distance", f"{c_dist:.1f} km", f"{d_dist:.1f}%")
+            m2.metric("Time", f"{int(c_time//60)}h {int(c_time%60)}m", f"{d_time:.1f}%")
+            m3.metric("Avg Pace", format_pace(c_pace) + "/km", f"{d_pace:.1f}%", delta_color="inverse")
+            
+        st.subheader("Trends Visualized")
+        
+        tab_vol, tab_pace = st.tabs(["Volume", "Pace Efficiency"])
+        
+        with tab_vol:
+            # Aggregate by week
+            vol_df = runs_df.set_index('date').resample('W').agg({'distance': 'sum'}).reset_index()
+            fig_vol = px.bar(vol_df, x='date', y='distance', title="Weekly Distance Volume")
+            fig_vol.update_layout(xaxis_title="", yaxis_title="Km", showlegend=False)
+            st.plotly_chart(fig_vol, use_container_width=True)
+            
+        with tab_pace:
+            # Scatter of pace over time
+            pace_df = runs_df[runs_df['distance'] > 0].copy()
+            fig_pace = px.scatter(pace_df, x='date', y='pace', color='type', title="Pace Evolution", trendline="lowess")
+            fig_pace.update_layout(xaxis_title="", yaxis_title="Pace (min/km)")
+            st.plotly_chart(fig_pace, use_container_width=True)
+
 # --- TAB: SHARE REPORT ---
 elif selected_tab == "Share":
     st.header(":material/share: Share Report")
@@ -1011,12 +1086,10 @@ elif selected_tab == "Share":
     with st.container(border=True):
         st.subheader("Generate Coach Summary")
         
-        # 1. Date Range
         c_dates, c_dummy = st.columns([2, 1])
         with c_dates:
             d_range = st.date_input("Date Range", value=(datetime.now() - timedelta(days=6), datetime.now()), format="YYYY/MM/DD")
             
-        # Handle date range tuple (start, end)
         if isinstance(d_range, tuple):
             if len(d_range) == 2:
                 start_r, end_r = d_range
@@ -1032,7 +1105,6 @@ elif selected_tab == "Share":
 
         st.divider()
         
-        # 2. Category Selection (Custom Chips UI)
         st.markdown("**Include Data:**")
         
         if 'share_cats' not in st.session_state:
