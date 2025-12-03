@@ -170,19 +170,30 @@ if selected_tab == "Plan":
 
 # --- TAB: FIELD (RUNS) ---
 elif selected_tab == "Field (Runs)":
-    c1, c2 = st.columns([3, 1])
-    with c1:
-        st.header("👟 Field Activities")
-    with c2:
-        # Removed expander so form is always visible
+    st.header("👟 Field Activities")
+    
+    # Full width logging form
+    with st.container(border=True):
         st.markdown("### ➕ Log Activity")
         with st.form("run_form"):
-            act_type = st.selectbox("Type", ["Run", "Walk", "Ultimate"])
-            act_date = st.date_input("Date", datetime.now())
-            c_a, c_b = st.columns(2)
-            dist = c_a.number_input("Distance (km)", min_value=0.0, step=0.01)
-            dur_str = c_b.text_input("Duration (mm:ss)", placeholder="30:00")
-            hr = st.number_input("Avg HR", min_value=0)
+            # Row 1: Basic Info
+            c1, c2, c3, c4 = st.columns(4)
+            act_type = c1.selectbox("Type", ["Run", "Walk", "Ultimate"])
+            act_date = c2.date_input("Date", datetime.now())
+            dist = c3.number_input("Distance (km)", min_value=0.0, step=0.01)
+            dur_str = c4.text_input("Duration (mm:ss)", placeholder="30:00")
+            
+            # Row 2: Heart Rate & Zones
+            st.caption("Heart Rate Zones (Time in mm:ss)")
+            rc1, rc2, rc3, rc4, rc5, rc6 = st.columns(6)
+            hr = rc1.number_input("Avg HR", min_value=0)
+            z1 = rc2.text_input("Zone 1", placeholder="00:00")
+            z2 = rc3.text_input("Zone 2", placeholder="00:00")
+            z3 = rc4.text_input("Zone 3", placeholder="00:00")
+            z4 = rc5.text_input("Zone 4", placeholder="00:00")
+            z5 = rc6.text_input("Zone 5", placeholder="00:00")
+            
+            # Row 3: Notes
             notes = st.text_input("Notes")
             
             submitted = st.form_submit_button("Save Activity")
@@ -194,6 +205,11 @@ elif selected_tab == "Field (Runs)":
                     "distance": dist,
                     "duration": parse_time_input(dur_str),
                     "avgHr": hr,
+                    "z1": parse_time_input(z1),
+                    "z2": parse_time_input(z2),
+                    "z3": parse_time_input(z3),
+                    "z4": parse_time_input(z4),
+                    "z5": parse_time_input(z5),
                     "notes": notes
                 }
                 st.session_state.data['runs'].insert(0, new_run)
@@ -206,6 +222,7 @@ elif selected_tab == "Field (Runs)":
     
     if not runs_df.empty:
         # Filter Logic
+        st.divider()
         filter_type = st.radio("Filter:", ["All", "Run", "Walk", "Ultimate"], horizontal=True)
         if filter_type != "All":
             filtered_df = runs_df[runs_df['type'] == filter_type]
@@ -235,6 +252,8 @@ elif selected_tab == "Field (Runs)":
         # Format for display
         display_df = filtered_df.copy()
         display_df['duration_fmt'] = display_df['duration'].apply(format_pace)
+        
+        # Optional: Add column for zones string if needed, currently keeping it clean
         display_df = display_df[['date', 'type', 'distance', 'duration_fmt', 'avgHr', 'notes']]
         display_df.columns = ['Date', 'Type', 'Dist (km)', 'Time', 'HR', 'Notes']
         
