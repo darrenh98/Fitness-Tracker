@@ -366,26 +366,9 @@ def generate_report(start_date, end_date, selected_cats):
 # --- Sidebar Navigation ---
 with st.sidebar:
     st.title(":material/sprint: RunLog Hub")
-    selected_tab = st.radio("Navigate", ["Plan", "Field (Runs)", "Gym", "Nutrition", "Stats"], label_visibility="collapsed")
+    selected_tab = st.radio("Navigate", ["Plan", "Field (Runs)", "Gym", "Nutrition", "Stats", "Share"], label_visibility="collapsed")
     st.divider()
     
-    # Export Section
-    with st.expander("📤 Share Report"):
-        st.caption("Generate a text summary for your coach.")
-        
-        # Date Range
-        col_r1, col_r2 = st.columns(2)
-        start_r = col_r1.date_input("Start", datetime.now() - timedelta(days=6))
-        end_r = col_r2.date_input("End", datetime.now())
-        
-        # Data Selection
-        cat_options = ["Run", "Walk", "Ultimate", "Gym", "Stats"]
-        selected_cats = st.multiselect("Include", cat_options, default=cat_options, label_visibility="collapsed")
-        
-        if st.button("Generate Report", use_container_width=True):
-            report_text = generate_report(start_r, end_r, selected_cats)
-            st.code(report_text, language="text")
-            
     with st.expander("👤 Athlete Profile"):
         prof = st.session_state.data['user_profile']
         c1, c2 = st.columns(2)
@@ -1052,3 +1035,57 @@ elif selected_tab == "Stats":
                         st.rerun()
     else:
         st.info("No health stats logged yet.")
+
+# --- TAB: SHARE REPORT ---
+elif selected_tab == "Share":
+    st.header(":material/share: Share Report")
+    
+    with st.container(border=True):
+        st.subheader("Generate Coach Summary")
+        
+        # 1. Date Range
+        c_dates, c_dummy = st.columns([2, 1])
+        with c_dates:
+            d_range = st.date_input("Date Range", value=(datetime.now() - timedelta(days=6), datetime.now()), format="MMM DD, YYYY")
+            
+        # Handle date range tuple (start, end)
+        if isinstance(d_range, tuple):
+            if len(d_range) == 2:
+                start_r, end_r = d_range
+            elif len(d_range) == 1:
+                start_r = d_range[0]
+                end_r = start_r
+            else:
+                start_r = datetime.now().date()
+                end_r = start_r
+        else:
+            start_r = d_range
+            end_r = d_range
+
+        st.divider()
+        
+        # 2. Category Selection (Custom Chips UI)
+        st.markdown("**Include Data:**")
+        
+        # Helper to manage selection state without multiselect widget
+        if 'share_cats' not in st.session_state:
+            st.session_state.share_cats = ["Run", "Walk", "Ultimate", "Gym", "Stats"]
+            
+        all_cats = ["Run", "Walk", "Ultimate", "Gym", "Stats"]
+        cols = st.columns(len(all_cats))
+        
+        # Create toggle buttons behaving like chips
+        for i, cat in enumerate(all_cats):
+            is_selected = cat in st.session_state.share_cats
+            if cols[i].checkbox(cat, value=is_selected, key=f"share_{cat}"):
+                if cat not in st.session_state.share_cats:
+                    st.session_state.share_cats.append(cat)
+            else:
+                if cat in st.session_state.share_cats:
+                    st.session_state.share_cats.remove(cat)
+                    
+        st.divider()
+        
+        if st.button("📄 Generate Text Report", type="primary"):
+            report_text = generate_report(start_r, end_r, st.session_state.share_cats)
+            st.text_area("Copy this text:", value=report_text, height=400)
