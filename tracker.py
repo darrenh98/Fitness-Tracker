@@ -254,57 +254,94 @@ def parse_time_input(time_str):
     except:
         return 0.0
 
-def generate_weekly_report(end_date=None):
-    if end_date is None:
-        end_date = datetime.now().date()
-    start_date = end_date - timedelta(days=6) # 7 days total
-    
-    report = [f"📊 **Weekly Training Report**"]
+def generate_report(start_date, end_date, selected_cats):
+    report = [f"📊 **Training Report**"]
     report.append(f"📅 {start_date.strftime('%b %d')} - {end_date.strftime('%b %d')}\n")
     
     # 1. FIELD ACTIVITIES
-    runs = st.session_state.data['runs']
-    # Filter this week's runs
-    weekly_runs = [r for r in runs if start_date <= datetime.strptime(r['date'], '%Y-%m-%d').date() <= end_date]
+    field_types = [t for t in ["Run", "Walk", "Ultimate"] if t in selected_cats]
     
-    if weekly_runs:
-        total_dist = sum(r['distance'] for r in weekly_runs)
-        total_time = sum(r['duration'] for r in weekly_runs)
-        report.append(f"👟 **FIELD ({len(weekly_runs)} sessions)**")
-        report.append(f"Total Dist: {total_dist:.1f} km | Time: {format_duration(total_time)}")
-        for r in weekly_runs:
-            feel = f"({r.get('feel')})" if r.get('feel') else ""
-            report.append(f"- {r['date'][5:]}: {r['type']} {r['distance']}km @ {format_duration(r['duration'])} {feel}")
-    else:
-        report.append("👟 **FIELD**: No activities.")
+    if field_types:
+        runs = st.session_state.data['runs']
+        # Filter by date and type
+        period_runs = [
+            r for r in runs 
+            if start_date <= datetime.strptime(r['date'], '%Y-%m-%d').date() <= end_date
+            and r['type'] in field_types
+        ]
+        # Sort by date
+        period_runs.sort(key=lambda x: x['date'])
         
-    report.append("") 
+        if period_runs:
+            total_dist = sum(r['distance'] for r in period_runs)
+            total_time = sum(r['duration'] for r in period_runs)
+            report.append(f"👟 **FIELD ACTIVITIES ({len(period_runs)})**")
+            report.append(f"Total: {total_dist:.1f} km | {format_duration(total_time)}")
+            
+            for r in period_runs:
+                # Basic line
+                line = f"- {r['date'][5:]}: {r['type']} {r['distance']}km @ {format_duration(r['duration'])}"
+                
+                # Pace calculation
+                if r['type'] != 'Ultimate' and r['distance'] > 0:
+                    pace = r['duration'] / r['distance']
+                    line += f" ({format_pace(pace)}/km)"
+                
+                # HR & Feel
+                hr = f"{r['avgHr']}bpm" if r['avgHr'] > 0 else ""
+                feel = r.get('feel', '')
+                if hr or feel:
+                    line += f" | {hr} {feel}"
+                
+                report.append(line)
+                
+                # Detailed Notes/Zones line
+                details = []
+                if r.get('notes'): details.append(f"📝 {r['notes']}")
+                
+                # Add zones if they exist and are non-zero
+                zones = []
+                for i in range(1, 6):
+                    z_val = r.get(f'z{i}', 0)
+                    if z_val > 0:
+                        zones.append(f"Z{i}:{format_duration(z_val)}")
+                if zones:
+                    details.append(f"Zones: {', '.join(zones)}")
+                
+                if details:
+                    report.append(f"   {' | '.join(details)}")
+            report.append("")
+    
+    # 2. GYM
+    if "Gym" in selected_cats:
+        gyms = st.session_state.data['gym_sessions']
+        period_gyms = [g for g in gyms if start_date <= datetime.strptime(g['date'], '%Y-%m-%d').date() <= end_date]
+        period_gyms.sort(key=lambda x: x['date'])
+        
+        if period_gyms:
+            report.append(f"💪 **GYM ({len(period_gyms)})**")
+            for g in period_gyms:
+                vol = g.get('totalVolume', 0)
+                report.append(f"- {g['date'][5:]}: {g['routineName']} (Vol: {vol:.0f}kg)")
+                # List exercises briefly
+                ex_names = [e['name'] for e in g['exercises']]
+                if ex_names:
+                    report.append(f"   Exs: {', '.join(ex_names)}")
+            report.append("")
 
-    # 2. GYM SESSIONS
-    gyms = st.session_state.data['gym_sessions']
-    weekly_gyms = [g for g in gyms if start_date <= datetime.strptime(g['date'], '%Y-%m-%d').date() <= end_date]
-    
-    if weekly_gyms:
-        report.append(f"💪 **GYM ({len(weekly_gyms)} sessions)**")
-        for g in weekly_gyms:
-            report.append(f"- {g['date'][5:]}: {g['routineName']} (Vol: {g.get('totalVolume',0):.0f}kg)")
-    else:
-        report.append("💪 **GYM**: No sessions.")
+    # 3. STATS
+    if "Stats" in selected_cats:
+        stats = st.session_state.data['health_logs']
+        period_stats = [s for s in stats if start_date <= datetime.strptime(s['date'], '%Y-%m-%d').date() <= end_date]
         
-    report.append("")
+        if period_stats:
+            avg_rhr = sum(s['rhr'] for s in period_stats) / len(period_stats)
+            avg_hrv = sum(s['hrv'] for s in period_stats) / len(period_stats)
+            avg_sleep = sum(s['sleepHours'] for s in period_stats) / len(period_stats)
+            
+            report.append(f"❤️ **RECOVERY (Avg)**")
+            report.append(f"Sleep: {avg_sleep:.1f}h | HRV: {int(avg_hrv)} | RHR: {int(avg_rhr)}")
 
-    # 3. STATS SUMMARY (Average)
-    stats = st.session_state.data['health_logs']
-    weekly_stats = [s for s in stats if start_date <= datetime.strptime(s['date'], '%Y-%m-%d').date() <= end_date]
-    
-    if weekly_stats:
-        avg_rhr = sum(s['rhr'] for s in weekly_stats) / len(weekly_stats)
-        avg_hrv = sum(s['hrv'] for s in weekly_stats) / len(weekly_stats)
-        avg_sleep = sum(s['sleepHours'] for s in weekly_stats) / len(weekly_stats)
-        
-        report.append(f"❤️ **RECOVERY (Avg)**")
-        report.append(f"Sleep: {avg_sleep:.1f}h | HRV: {int(avg_hrv)} | RHR: {int(avg_rhr)}")
-    
     return "\n".join(report)
 
 # --- Sidebar Navigation ---
@@ -316,10 +353,18 @@ with st.sidebar:
     # Export Section
     with st.expander("📤 Share Report"):
         st.caption("Generate a text summary for your coach.")
-        # Default to today, but allow picking a past week end date
-        report_date = st.date_input("Week Ending", datetime.now())
+        
+        # Date Range
+        col_r1, col_r2 = st.columns(2)
+        start_r = col_r1.date_input("Start", datetime.now() - timedelta(days=6))
+        end_r = col_r2.date_input("End", datetime.now())
+        
+        # Data Selection
+        cat_options = ["Run", "Walk", "Ultimate", "Gym", "Stats"]
+        selected_cats = st.multiselect("Include", cat_options, default=cat_options, label_visibility="collapsed")
+        
         if st.button("Generate Report", use_container_width=True):
-            report_text = generate_weekly_report(report_date)
+            report_text = generate_report(start_r, end_r, selected_cats)
             st.code(report_text, language="text")
             
     with st.expander("👤 Athlete Profile"):
