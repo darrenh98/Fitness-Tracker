@@ -178,7 +178,6 @@ DEFAULT_DATA = {
     "runs": [],
     "health_logs": [],
     "gym_sessions": [],
-    # Removed nutrition_logs
     "routines": [
         {"id": 1, "name": "Leg Day", "exercises": ["Squats", "Split Squats", "Glute Bridges", "Calf Raises"]},
         {"id": 2, "name": "Upper Body", "exercises": ["Bench Press", "Pull Ups", "Overhead Press", "Rows"]}
@@ -427,17 +426,32 @@ elif selected_tab == "Field (Runs)":
     st.header(":material/directions_run: Field Activities")
     runs_df = pd.DataFrame(st.session_state.data['runs'])
     
+    # Check for success message after reload
+    if 'run_log_success' in st.session_state and st.session_state.run_log_success:
+        st.toast("✅ Activity Logged Successfully!")
+        st.session_state.run_log_success = False
+
     edit_run_id = st.session_state.get('edit_run_id', None)
     if 'form_act_type' not in st.session_state: st.session_state.form_act_type = "Run"
     
-    # Get defaults (now includes Cadence/Power)
-    sd_dist, sd_dur, sd_hr, sd_cad, sd_pwr = get_last_run_defaults(st.session_state.form_act_type)
-    
+    # CLEAN SLATE DEFAULTS (No smart defaults, everything resets to 0/empty)
     def_type = st.session_state.form_act_type
-    def_date, def_dist, def_dur, def_hr, def_notes, def_feel, def_rpe = datetime.now(), sd_dist, sd_dur, sd_hr, "", "Normal", 5
-    def_cad, def_pwr = sd_cad, sd_pwr
-    def_z1, def_z2, def_z3, def_z4, def_z5 = "", "", "", "", ""
+    def_date = datetime.now()
+    def_dist = 0.0
+    def_dur = 0.0 # Will render as empty string or "00:00:00"
+    def_hr = 0
+    def_notes = ""
+    def_feel = "Normal"
+    def_rpe = 5
+    def_cad = 0
+    def_pwr = 0
+    def_z1 = ""
+    def_z2 = ""
+    def_z3 = ""
+    def_z4 = ""
+    def_z5 = ""
     
+    # Overwrite if Editing
     if edit_run_id:
         run_data = next((r for r in st.session_state.data['runs'] if r['id'] == edit_run_id), None)
         if run_data:
@@ -486,7 +500,9 @@ elif selected_tab == "Field (Runs)":
                 dist = st.number_input("Distance", min_value=0.0, step=0.01, value=float(def_dist), label_visibility="collapsed")
             with c2:
                 st.caption("Duration (hh:mm:ss)")
-                dur_str = st.text_input("Duration", value=format_duration(def_dur), placeholder="00:30:00", label_visibility="collapsed")
+                # If editing, show the time. If new, show placeholder/empty for faster typing
+                dur_val = format_duration(def_dur) if edit_run_id or def_dur > 0 else ""
+                dur_str = st.text_input("Duration", value=dur_val, placeholder="00:30:00", label_visibility="collapsed")
             
             # Row 3: HR, RPE, Cadence, Power
             c3, c4, c5, c6 = st.columns(4)
@@ -541,10 +557,10 @@ elif selected_tab == "Field (Runs)":
                     idx = next((i for i, r in enumerate(st.session_state.data['runs']) if r['id'] == edit_run_id), -1)
                     if idx != -1: st.session_state.data['runs'][idx] = run_obj
                     st.session_state.edit_run_id = None
-                    st.success("Activity Updated!")
+                    st.session_state.run_log_success = True
                 else:
                     st.session_state.data['runs'].insert(0, run_obj)
-                    st.success("Activity Logged!")
+                    st.session_state.run_log_success = True
                 
                 persist()
                 st.rerun()
