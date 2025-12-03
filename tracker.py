@@ -316,17 +316,15 @@ elif selected_tab == "Field (Runs)":
     edit_run_id = st.session_state.get('edit_run_id', None)
     
     # State handling for Quick-Tap defaults
-    # We use separate session_state keys for the widgets to control them dynamically
     if 'form_act_type' not in st.session_state: st.session_state.form_act_type = "Run"
     
     # Get smart defaults based on CURRENT selection
-    # (Note: In a real "dynamic" form we'd use callback on the radio change to update defaults,
-    #  but for simplicity we fetch defaults on render if not editing)
     sd_dist, sd_dur, sd_hr = get_last_run_defaults(st.session_state.form_act_type)
     
     # Default values logic
     def_type = st.session_state.form_act_type
     def_date, def_dist, def_dur, def_hr, def_notes, def_feel, def_rpe = datetime.now(), sd_dist, sd_dur, sd_hr, "", "Normal", 5
+    def_z1, def_z2, def_z3, def_z4, def_z5 = "", "", "", "", ""
     
     if edit_run_id:
         run_data = next((r for r in st.session_state.data['runs'] if r['id'] == edit_run_id), None)
@@ -339,6 +337,11 @@ elif selected_tab == "Field (Runs)":
             def_notes = run_data.get('notes', '')
             def_feel = run_data.get('feel', 'Normal')
             def_rpe = run_data.get('rpe', 5)
+            def_z1 = format_duration(run_data.get('z1', 0))
+            def_z2 = format_duration(run_data.get('z2', 0))
+            def_z3 = format_duration(run_data.get('z3', 0))
+            def_z4 = format_duration(run_data.get('z4', 0))
+            def_z5 = format_duration(run_data.get('z5', 0))
 
     form_label = f"✏️ Edit Activity" if edit_run_id else "➕ Log Activity (Quick-Tap)"
     expander_state = True if edit_run_id else False
@@ -370,25 +373,34 @@ elif selected_tab == "Field (Runs)":
                                 key="act_type_radio",
                                 horizontal=True, label_visibility="collapsed")
             
-            # Row 2: Sliders for Speed & Distance
+            # Row 2: Manual Inputs
             c1, c2 = st.columns(2)
             with c1:
-                st.caption(f"Distance: {def_dist} km")
-                dist = st.slider("Distance", 0.0, 42.0, float(def_dist), 0.1, label_visibility="collapsed")
+                st.caption("Distance (km)")
+                dist = st.number_input("Distance", min_value=0.0, step=0.01, value=float(def_dist), label_visibility="collapsed")
             with c2:
-                st.caption(f"Duration: {int(def_dur)} mins")
-                dur_mins = st.slider("Duration", 0, 180, int(def_dur), 5, label_visibility="collapsed")
+                st.caption("Duration (hh:mm:ss)")
+                dur_str = st.text_input("Duration", value=format_duration(def_dur), placeholder="00:30:00", label_visibility="collapsed")
             
             # Row 3: Effort
             c3, c4 = st.columns(2)
             with c3:
-                st.caption(f"Avg HR: {def_hr} bpm")
-                hr = st.slider("Heart Rate", 60, 200, int(def_hr), 1, label_visibility="collapsed")
+                st.caption("Avg HR")
+                hr = st.number_input("Heart Rate", min_value=0, value=int(def_hr), label_visibility="collapsed")
             with c4:
-                st.caption(f"RPE (Effort): {def_rpe}/10")
-                rpe = st.slider("RPE", 1, 10, int(def_rpe), 1, label_visibility="collapsed")
+                st.caption("RPE (1-10)")
+                rpe = st.number_input("RPE", min_value=1, max_value=10, value=int(def_rpe), label_visibility="collapsed")
 
-            # Row 4: Feel & Date
+            # Row 4: HR Zones (Restored)
+            st.caption("Heart Rate Zones (Time in mm:ss)")
+            rc1, rc2, rc3, rc4, rc5 = st.columns(5)
+            z1 = rc1.text_input("Zone 1", value=def_z1, placeholder="00:00")
+            z2 = rc2.text_input("Zone 2", value=def_z2, placeholder="00:00")
+            z3 = rc3.text_input("Zone 3", value=def_z3, placeholder="00:00")
+            z4 = rc4.text_input("Zone 4", value=def_z4, placeholder="00:00")
+            z5 = rc5.text_input("Zone 5", value=def_z5, placeholder="00:00")
+
+            # Row 5: Feel & Date
             c5, c6 = st.columns(2)
             with c5:
                 st.caption("How did it feel?")
@@ -399,8 +411,9 @@ elif selected_tab == "Field (Runs)":
                 st.caption("Date")
                 act_date = st.date_input("Date", def_date, label_visibility="collapsed")
             
-            # Row 5: Notes
-            notes = st.text_area("Notes", value=def_notes, placeholder="Easy run, felt strong...", height=3)
+            # Row 6: Notes
+            st.caption("Notes")
+            notes = st.text_area("Notes", value=def_notes, placeholder="Easy run, felt strong...", height=3, label_visibility="collapsed")
             
             # Actions
             btn_text = "Update Activity" if edit_run_id else "Save Activity"
@@ -415,10 +428,15 @@ elif selected_tab == "Field (Runs)":
                     "date": str(act_date),
                     "type": act_type,
                     "distance": dist,
-                    "duration": float(dur_mins), # Store as decimal minutes directly
+                    "duration": parse_time_input(dur_str), # Convert string back to decimal mins
                     "avgHr": hr,
                     "rpe": rpe,
                     "feel": feel,
+                    "z1": parse_time_input(z1),
+                    "z2": parse_time_input(z2),
+                    "z3": parse_time_input(z3),
+                    "z4": parse_time_input(z4),
+                    "z5": parse_time_input(z5),
                     "notes": notes
                 }
                 
@@ -441,7 +459,7 @@ elif selected_tab == "Field (Runs)":
                 if st.button("Save Template"):
                     if tpl_name:
                         st.session_state.data['templates'][tpl_name] = {
-                            "type": def_type, "distance": dist, "duration": dur_mins, "notes": notes
+                            "type": def_type, "distance": dist, "duration": parse_time_input(dur_str), "notes": notes
                         }
                         persist()
                         st.success(f"Saved '{tpl_name}'!")
@@ -602,24 +620,16 @@ elif selected_tab == "Gym":
                 st.subheader(f"Logging: {sel_routine['name']}")
                 log_date = st.date_input("Date", datetime.now())
                 
-                # Dynamic inputs for exercises with SLIDERS
+                # Dynamic inputs for exercises with MANUAL TEXT
                 exercises_data = []
                 for ex in sel_routine['exercises']:
                     st.markdown(f"**{ex}**")
                     c1, c2 = st.columns(2)
                     
-                    # Try to find smart default from history? 
-                    # (Simplified for now: Just sliders)
-                    w = c1.slider(f"Weight ({ex})", 0, 200, 40, 5)
-                    r = c2.slider(f"Reps ({ex})", 0, 30, 10, 1)
-                    # We store sets as a simple repeating structure for minimal UI
-                    sets_count = st.slider(f"Sets ({ex})", 1, 6, 3, 1, key=f"sets_{ex}")
+                    w = c1.text_input(f"Weight ({ex})", placeholder="100, 100, 100", help="Comma separated for sets", label_visibility="collapsed")
+                    r = c2.text_input(f"Reps ({ex})", placeholder="10, 8, 8", help="Comma separated for sets", label_visibility="collapsed")
                     
-                    # Expand sets for data structure
-                    w_str = ",".join([str(w)] * sets_count)
-                    r_str = ",".join([str(r)] * sets_count)
-                    
-                    exercises_data.append({"name": ex, "weights": w_str, "reps": r_str})
+                    exercises_data.append({"name": ex, "weights": w, "reps": r})
                 
                 if st.form_submit_button("Complete Workout"):
                     processed_exs = []
@@ -709,11 +719,11 @@ elif selected_tab == "Nutrition":
             f_date = st.date_input("Date", def_nut_date)
             meal = st.text_input("Meal Name", value=def_meal, placeholder="Chicken Rice")
             
-            # Sliders for nutrition quick log
-            cal = st.slider("Calories", 0, 2000, int(def_cal), 50)
-            prot = st.slider("Protein (g)", 0, 100, int(def_prot), 5)
-            carbs = st.slider("Carbs (g)", 0, 200, int(def_carb), 5)
-            fat = st.slider("Fat (g)", 0, 100, int(def_fat), 5)
+            # Reverted to number inputs
+            cal = st.number_input("Calories", value=int(def_cal), min_value=0, step=50)
+            prot = st.number_input("Protein (g)", value=int(def_prot), min_value=0, step=1)
+            carbs = st.number_input("Carbs (g)", value=int(def_carb), min_value=0, step=1)
+            fat = st.number_input("Fat (g)", value=int(def_fat), min_value=0, step=1)
             
             btn_txt = "Update Meal" if edit_nut_id else "Add Meal"
             if st.form_submit_button(btn_txt):
@@ -808,14 +818,14 @@ elif selected_tab == "Stats":
     with st.expander(lbl_h, expanded=expanded_h):
         with st.form("health_form"):
             h_date = st.date_input("Date", def_h_date)
-            # Converted to Sliders
+            # Reverted to Number Inputs
             c1, c2 = st.columns(2)
-            rhr = c1.slider("Resting HR", 30, 150, int(def_rhr), 1)
-            hrv = c2.slider("HRV (ms)", 0, 200, int(def_hrv), 1)
+            rhr = c1.number_input("Resting HR", min_value=30, max_value=150, value=int(def_rhr))
+            hrv = c2.number_input("HRV (ms)", min_value=0, value=int(def_hrv))
             
             c3, c4 = st.columns(2)
-            vo2 = c3.slider("VO2 Max", 20.0, 80.0, float(def_vo2), 0.1)
-            sleep = c4.slider("Sleep (hrs)", 0.0, 12.0, float(def_sleep), 0.1)
+            vo2 = c3.number_input("VO2 Max", min_value=0.0, value=float(def_vo2), step=0.1)
+            sleep = c4.number_input("Sleep (hrs)", min_value=0.0, value=float(def_sleep), step=0.1)
             
             btn_h_txt = "Update Stats" if edit_hlth_id else "Log Stats"
             
