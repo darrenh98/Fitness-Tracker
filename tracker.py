@@ -46,6 +46,15 @@ st.markdown("""
         border: none;
         transition: box-shadow 0.2s ease-in-out, transform 0.2s ease-in-out;
     }
+    
+    /* List Item Containers */
+    [data-testid="stVerticalBlock"] > [style*="flex-direction: column;"] > [data-testid="stVerticalBlock"] > [data-testid="stContainer"] {
+        background-color: #ffffff;
+        padding: 1rem;
+        border-radius: 0.75rem;
+        border: 1px solid #f1f5f9;
+        margin-bottom: 0.5rem;
+    }
 
     /* subtle hover effect on cards */
     .stCard:hover {
@@ -106,7 +115,7 @@ st.markdown("""
     .stButton button {
         border-radius: 10px;
         font-weight: 600;
-        padding: 0.5rem 1.5rem;
+        padding: 0.5rem 1rem;
         border: none;
         transition: all 0.2s;
     }
@@ -173,6 +182,19 @@ def format_pace(decimal_min):
     mins = int(decimal_min)
     secs = int((decimal_min - mins) * 60)
     return f"{mins}'{secs:02d}\""
+
+def format_duration(decimal_min):
+    if not decimal_min:
+        return ""
+    mins = int(decimal_min)
+    secs = int((decimal_min - mins) * 60)
+    
+    hrs = mins // 60
+    rem_mins = mins % 60
+    
+    if hrs > 0:
+        return f"{hrs:02d}:{rem_mins:02d}:{secs:02d}"
+    return f"{rem_mins:02d}:{secs:02d}"
 
 def parse_time_input(time_str):
     try:
@@ -316,33 +338,62 @@ elif selected_tab == "Field (Runs)":
 
     st.divider()
 
-    # --- LOGGING FORM (Dropdown/Expander) ---
-    with st.expander("➕ Log Activity", expanded=False):
+    # --- LOGGING FORM ---
+    # Determine Edit Mode
+    edit_run_id = st.session_state.get('edit_run_id', None)
+    
+    # Default values
+    def_type, def_date, def_dist, def_dur, def_hr, def_notes = "Run", datetime.now(), 0.0, "", 0, ""
+    def_z1, def_z2, def_z3, def_z4, def_z5 = "", "", "", "", ""
+    
+    if edit_run_id:
+        # Find run data
+        run_data = next((r for r in st.session_state.data['runs'] if r['id'] == edit_run_id), None)
+        if run_data:
+            def_type = run_data['type']
+            def_date = datetime.strptime(run_data['date'], '%Y-%m-%d').date()
+            def_dist = run_data['distance']
+            def_dur = format_duration(run_data['duration'])
+            def_hr = run_data['avgHr']
+            def_notes = run_data.get('notes', '')
+            def_z1 = format_duration(run_data.get('z1', 0))
+            def_z2 = format_duration(run_data.get('z2', 0))
+            def_z3 = format_duration(run_data.get('z3', 0))
+            def_z4 = format_duration(run_data.get('z4', 0))
+            def_z5 = format_duration(run_data.get('z5', 0))
+
+    # Form Title
+    form_label = f"✏️ Edit Activity" if edit_run_id else "➕ Log Activity"
+    expander_state = True if edit_run_id else False
+
+    with st.expander(form_label, expanded=expander_state):
         with st.form("run_form"):
             # Row 1: Basic Info
             c1, c2, c3, c4 = st.columns(4)
-            act_type = c1.selectbox("Type", ["Run", "Walk", "Ultimate"])
-            act_date = c2.date_input("Date", datetime.now())
-            dist = c3.number_input("Distance (km)", min_value=0.0, step=0.01)
-            dur_str = c4.text_input("Duration (hh:mm:ss)", placeholder="01:30:00")
+            act_type = c1.selectbox("Type", ["Run", "Walk", "Ultimate"], index=["Run", "Walk", "Ultimate"].index(def_type) if def_type in ["Run", "Walk", "Ultimate"] else 0)
+            act_date = c2.date_input("Date", def_date)
+            dist = c3.number_input("Distance (km)", min_value=0.0, step=0.01, value=float(def_dist))
+            dur_str = c4.text_input("Duration (hh:mm:ss)", value=def_dur, placeholder="01:30:00")
             
             # Row 2: Heart Rate & Zones
             st.caption("Heart Rate Zones (Time in mm:ss)")
             rc1, rc2, rc3, rc4, rc5, rc6 = st.columns(6)
-            hr = rc1.number_input("Avg HR", min_value=0)
-            z1 = rc2.text_input("Zone 1", placeholder="00:00")
-            z2 = rc3.text_input("Zone 2", placeholder="00:00")
-            z3 = rc4.text_input("Zone 3", placeholder="00:00")
-            z4 = rc5.text_input("Zone 4", placeholder="00:00")
-            z5 = rc6.text_input("Zone 5", placeholder="00:00")
+            hr = rc1.number_input("Avg HR", min_value=0, value=int(def_hr))
+            z1 = rc2.text_input("Zone 1", value=def_z1, placeholder="00:00")
+            z2 = rc3.text_input("Zone 2", value=def_z2, placeholder="00:00")
+            z3 = rc4.text_input("Zone 3", value=def_z3, placeholder="00:00")
+            z4 = rc5.text_input("Zone 4", value=def_z4, placeholder="00:00")
+            z5 = rc6.text_input("Zone 5", value=def_z5, placeholder="00:00")
             
             # Row 3: Notes
-            notes = st.text_input("Notes")
+            notes = st.text_input("Notes", value=def_notes)
             
-            submitted = st.form_submit_button("Save Activity")
-            if submitted:
-                new_run = {
-                    "id": int(time.time()),
+            # Submit Button logic
+            btn_text = "Update Activity" if edit_run_id else "Save Activity"
+            
+            if st.form_submit_button(btn_text):
+                run_obj = {
+                    "id": edit_run_id if edit_run_id else int(time.time()),
                     "date": str(act_date),
                     "type": act_type,
                     "distance": dist,
@@ -355,33 +406,51 @@ elif selected_tab == "Field (Runs)":
                     "z5": parse_time_input(z5),
                     "notes": notes
                 }
-                st.session_state.data['runs'].insert(0, new_run)
+                
+                if edit_run_id:
+                    # Replace existing
+                    idx = next((i for i, r in enumerate(st.session_state.data['runs']) if r['id'] == edit_run_id), -1)
+                    if idx != -1:
+                        st.session_state.data['runs'][idx] = run_obj
+                    st.session_state.edit_run_id = None # Clear edit mode
+                    st.success("Activity Updated!")
+                else:
+                    # Insert new
+                    st.session_state.data['runs'].insert(0, run_obj)
+                    st.success("Activity Logged!")
+                
                 persist()
-                st.success("Activity Logged!")
+                st.rerun()
+
+        if edit_run_id:
+            if st.button("Cancel Edit"):
+                st.session_state.edit_run_id = None
                 st.rerun()
 
     # --- HISTORY TABLE ---
     if not runs_df.empty:
         st.subheader("History")
         
-        # Format for display
-        display_df = filtered_df.copy()
-        if not display_df.empty:
-            display_df['duration_fmt'] = display_df['duration'].apply(format_pace)
-            # Display Columns
-            display_df = display_df[['date', 'type', 'distance', 'duration_fmt', 'avgHr', 'notes']]
-            display_df.columns = ['Date', 'Type', 'Dist (km)', 'Time', 'HR', 'Notes']
-            
-            with st.container(border=True):
-                st.dataframe(display_df, use_container_width=True, hide_index=True)
-            
-            # Delete functionality
-            with st.expander("Manage Data"):
-                run_to_delete = st.selectbox("Select entry to delete", options=runs_df['id'], format_func=lambda x: f"{x} (ID)")
-                if st.button("Delete Entry"):
-                    st.session_state.data['runs'] = [r for r in st.session_state.data['runs'] if r['id'] != run_to_delete]
-                    persist()
-                    st.rerun()
+        # Iterate and display rows with actions
+        for i, row in filtered_df.iterrows():
+            with st.container():
+                c_date, c_type, c_dist, c_time, c_hr, c_actions = st.columns([2, 2, 2, 2, 2, 2])
+                
+                c_date.markdown(f"**{row['date']}**")
+                c_type.text(row['type'])
+                c_dist.text(f"{row['distance']} km")
+                c_time.text(format_pace(row['duration']) + "/km")
+                c_hr.text(f"{row['avgHr']} bpm" if row['avgHr'] > 0 else "-")
+                
+                with c_actions:
+                    col_edit, col_del = st.columns(2)
+                    if col_edit.button("✏️", key=f"edit_run_{row['id']}"):
+                        st.session_state.edit_run_id = row['id']
+                        st.rerun()
+                    if col_del.button("🗑️", key=f"del_run_{row['id']}"):
+                        st.session_state.data['runs'] = [r for r in st.session_state.data['runs'] if r['id'] != row['id']]
+                        persist()
+                        st.rerun()
 
 # --- TAB: GYM ---
 elif selected_tab == "Gym":
@@ -407,9 +476,10 @@ elif selected_tab == "Gym":
         # Display Routines
         for r in st.session_state.data['routines']:
             with st.container(border=True):
-                st.markdown(f"**{r['name']}**")
-                st.caption(" • ".join(r['exercises']))
-                if st.button("Delete", key=f"del_rout_{r['id']}"):
+                c1, c2 = st.columns([5, 1])
+                c1.markdown(f"**{r['name']}**")
+                c1.caption(" • ".join(r['exercises']))
+                if c2.button("🗑️", key=f"del_rout_{r['id']}"):
                     st.session_state.data['routines'] = [x for x in st.session_state.data['routines'] if x['id'] != r['id']]
                     persist()
                     st.rerun()
@@ -430,8 +500,8 @@ elif selected_tab == "Gym":
                 for ex in sel_routine['exercises']:
                     st.markdown(f"**{ex}**")
                     c1, c2, c3 = st.columns(3)
-                    w = c1.text_input(f"Weight ({ex})", placeholder="100, 100, 100", help="Comma separated for sets", label_visibility="collapsed")
-                    r = c2.text_input(f"Reps ({ex})", placeholder="10, 8, 8", help="Comma separated for sets", label_visibility="collapsed")
+                    w = c1.text_input(f"Weight ({ex})", placeholder="100, 100", help="Comma separated for sets", label_visibility="collapsed")
+                    r = c2.text_input(f"Reps ({ex})", placeholder="10, 8", help="Comma separated for sets", label_visibility="collapsed")
                     
                     exercises_data.append({"name": ex, "weights": w, "reps": r})
                 
@@ -477,13 +547,18 @@ elif selected_tab == "Gym":
             
             st.divider()
             
+            # List rows
             for s in sessions:
-                with st.container(border=True):
-                    st.markdown(f"**{s['date']} - {s['routineName']}**")
-                    st.caption(f"Volume: {s.get('totalVolume',0)}kg")
-                    for ex in s['exercises']:
-                        st.markdown(f"- {ex['name']}: {len(ex['sets'])} sets")
-                    if st.button("Delete Session", key=f"del_sess_{s['id']}"):
+                with st.container():
+                    c1, c2, c3 = st.columns([3, 4, 1])
+                    c1.markdown(f"**{s['date']}**")
+                    c1.caption(s['routineName'])
+                    
+                    details = ", ".join([f"{ex['name']} ({len(ex['sets'])})" for ex in s['exercises']])
+                    c2.caption(details)
+                    c2.text(f"Vol: {s.get('totalVolume',0)}kg")
+                    
+                    if c3.button("🗑️", key=f"del_sess_{s['id']}"):
                         st.session_state.data['gym_sessions'] = [x for x in st.session_state.data['gym_sessions'] if x['id'] != s['id']]
                         persist()
                         st.rerun()
@@ -496,19 +571,36 @@ elif selected_tab == "Nutrition":
     
     c1, c2 = st.columns([1, 2])
     
+    # Nutrition Edit Logic
+    edit_nut_id = st.session_state.get('edit_nut_id', None)
+    
+    def_nut_date, def_meal, def_cal, def_prot, def_carb, def_fat = datetime.now(), "", 0, 0, 0, 0
+    
+    if edit_nut_id:
+        n_data = next((n for n in st.session_state.data['nutrition_logs'] if n['id'] == edit_nut_id), None)
+        if n_data:
+            def_nut_date = datetime.strptime(n_data['date'], '%Y-%m-%d').date()
+            def_meal = n_data['meal']
+            def_cal = n_data['calories']
+            def_prot = n_data['protein']
+            def_carb = n_data['carbs']
+            def_fat = n_data['fat']
+
     with c1:
-        st.subheader("Add Meal")
+        lbl = "✏️ Edit Meal" if edit_nut_id else "Add Meal"
+        st.subheader(lbl)
         with st.form("food_form"):
-            f_date = st.date_input("Date", datetime.now())
-            meal = st.text_input("Meal Name", placeholder="Chicken Rice")
-            cal = st.number_input("Calories", min_value=0)
-            prot = st.number_input("Protein (g)", min_value=0)
-            carbs = st.number_input("Carbs (g)", min_value=0)
-            fat = st.number_input("Fat (g)", min_value=0)
+            f_date = st.date_input("Date", def_nut_date)
+            meal = st.text_input("Meal Name", value=def_meal, placeholder="Chicken Rice")
+            cal = st.number_input("Calories", value=def_cal, min_value=0)
+            prot = st.number_input("Protein (g)", value=def_prot, min_value=0)
+            carbs = st.number_input("Carbs (g)", value=def_carb, min_value=0)
+            fat = st.number_input("Fat (g)", value=def_fat, min_value=0)
             
-            if st.form_submit_button("Add Meal"):
-                new_food = {
-                    "id": int(time.time()),
+            btn_txt = "Update Meal" if edit_nut_id else "Add Meal"
+            if st.form_submit_button(btn_txt):
+                nut_obj = {
+                    "id": edit_nut_id if edit_nut_id else int(time.time()),
                     "date": str(f_date),
                     "meal": meal,
                     "calories": cal,
@@ -516,8 +608,22 @@ elif selected_tab == "Nutrition":
                     "carbs": carbs,
                     "fat": fat
                 }
-                st.session_state.data['nutrition_logs'].insert(0, new_food)
+                
+                if edit_nut_id:
+                     idx = next((i for i, n in enumerate(st.session_state.data['nutrition_logs']) if n['id'] == edit_nut_id), -1)
+                     if idx != -1: st.session_state.data['nutrition_logs'][idx] = nut_obj
+                     st.session_state.edit_nut_id = None
+                     st.success("Meal Updated!")
+                else:
+                    st.session_state.data['nutrition_logs'].insert(0, nut_obj)
+                    st.success("Meal Added!")
+                    
                 persist()
+                st.rerun()
+                
+        if edit_nut_id:
+            if st.button("Cancel"):
+                st.session_state.edit_nut_id = None
                 st.rerun()
                 
     with c2:
@@ -541,36 +647,81 @@ elif selected_tab == "Nutrition":
         # History
         st.divider()
         st.subheader("Recent Meals")
-        nut_df = pd.DataFrame(st.session_state.data['nutrition_logs'])
-        if not nut_df.empty:
-            with st.container(border=True):
-                st.dataframe(nut_df[['date', 'meal', 'calories', 'protein', 'carbs', 'fat']], use_container_width=True, hide_index=True)
-        else:
-            st.info("No meals logged.")
+        
+        for n in st.session_state.data['nutrition_logs']:
+             with st.container():
+                 nc1, nc2, nc3, nc4, nc_act = st.columns([2, 3, 2, 3, 2])
+                 nc1.markdown(f"**{n['date']}**")
+                 nc2.text(n['meal'])
+                 nc3.text(f"{n['calories']} kcal")
+                 nc4.caption(f"P: {n['protein']}g • C: {n['carbs']}g • F: {n['fat']}g")
+                 
+                 with nc_act:
+                    be, bd = st.columns(2)
+                    if be.button("✏️", key=f"edit_nut_{n['id']}"):
+                        st.session_state.edit_nut_id = n['id']
+                        st.rerun()
+                    if bd.button("🗑️", key=f"del_nut_{n['id']}"):
+                        st.session_state.data['nutrition_logs'] = [x for x in st.session_state.data['nutrition_logs'] if x['id'] != n['id']]
+                        persist()
+                        st.rerun()
 
 # --- TAB: STATS (HEALTH) ---
 elif selected_tab == "Stats":
     st.header("❤️ Physiological Stats")
     
-    with st.expander("➕ Log Health Stats"):
+    # Edit Logic
+    edit_hlth_id = st.session_state.get('edit_hlth_id', None)
+    
+    def_h_date, def_rhr, def_hrv, def_vo2, def_sleep = datetime.now(), 60, 0, 0.0, 0.0
+    
+    if edit_hlth_id:
+        h_data = next((h for h in st.session_state.data['health_logs'] if h['id'] == edit_hlth_id), None)
+        if h_data:
+            def_h_date = datetime.strptime(h_data['date'], '%Y-%m-%d').date()
+            def_rhr = h_data['rhr']
+            def_hrv = h_data['hrv']
+            def_vo2 = h_data['vo2Max']
+            def_sleep = h_data['sleepHours']
+
+    lbl_h = "✏️ Edit Stats" if edit_hlth_id else "➕ Log Health Stats"
+    expanded_h = True if edit_hlth_id else False
+
+    with st.expander(lbl_h, expanded=expanded_h):
         with st.form("health_form"):
-            h_date = st.date_input("Date", datetime.now())
-            rhr = st.number_input("Resting HR", min_value=30, max_value=150)
-            hrv = st.number_input("HRV (ms)", min_value=0)
-            vo2 = st.number_input("VO2 Max", min_value=0.0, step=0.1)
-            sleep = st.number_input("Sleep (hrs)", min_value=0.0, step=0.1)
+            h_date = st.date_input("Date", def_h_date)
+            rhr = st.number_input("Resting HR", min_value=30, max_value=150, value=int(def_rhr))
+            hrv = st.number_input("HRV (ms)", min_value=0, value=int(def_hrv))
+            vo2 = st.number_input("VO2 Max", min_value=0.0, step=0.1, value=float(def_vo2))
+            sleep = st.number_input("Sleep (hrs)", min_value=0.0, step=0.1, value=float(def_sleep))
             
-            if st.form_submit_button("Log Stats"):
+            btn_h_txt = "Update Stats" if edit_hlth_id else "Log Stats"
+            
+            if st.form_submit_button(btn_h_txt):
                 new_h = {
-                    "id": int(time.time()),
+                    "id": edit_hlth_id if edit_hlth_id else int(time.time()),
                     "date": str(h_date),
                     "rhr": rhr,
                     "hrv": hrv,
                     "vo2Max": vo2,
                     "sleepHours": sleep
                 }
-                st.session_state.data['health_logs'].insert(0, new_h)
+                
+                if edit_hlth_id:
+                     idx = next((i for i, h in enumerate(st.session_state.data['health_logs']) if h['id'] == edit_hlth_id), -1)
+                     if idx != -1: st.session_state.data['health_logs'][idx] = new_h
+                     st.session_state.edit_hlth_id = None
+                     st.success("Stats Updated!")
+                else:
+                    st.session_state.data['health_logs'].insert(0, new_h)
+                    st.success("Stats Logged!")
+                
                 persist()
+                st.rerun()
+
+        if edit_hlth_id:
+            if st.button("Cancel Edit", key="cancel_h"):
+                st.session_state.edit_hlth_id = None
                 st.rerun()
 
     health_df = pd.DataFrame(st.session_state.data['health_logs'])
@@ -611,6 +762,52 @@ elif selected_tab == "Stats":
                 fig_vo2.update_traces(line_color='#3b82f6')
                 fig_vo2.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_family="Inter")
                 st.plotly_chart(fig_vo2, use_container_width=True)
+        
+        st.divider()
+        st.subheader("History")
+        # List rows
+        # Need to sort descending by date for list view (charts need ascending)
+        list_h_df = health_df.sort_values(by='date', ascending=False)
+        
+        for index, row in list_h_df.iterrows():
+             with st.container():
+                 hc1, hc2, hc3, hc4, hc5, hc_act = st.columns(6)
+                 hc1.markdown(f"**{row['date'].date()}**")
+                 hc2.caption("RHR")
+                 hc2.text(row['rhr'])
+                 hc3.caption("HRV")
+                 hc3.text(row['hrv'])
+                 hc4.caption("VO2")
+                 hc4.text(row['vo2Max'])
+                 hc5.caption("Sleep")
+                 hc5.text(row['sleepHours'])
+                 
+                 with hc_act:
+                    he, hd = st.columns(2)
+                    # Note: accessing ID from dataframe might require keeping it in load
+                    # Assuming ID column exists in dataframe as 'id'
+                    # If pandas dropped it, we rely on session_state list which is safer.
+                    pass
+        
+        # Iterating session state directly is safer for actions than the DF which might have reordered/indexed
+        for h in st.session_state.data['health_logs']:
+             with st.container():
+                 cols = st.columns([2, 2, 2, 2, 2, 2])
+                 cols[0].markdown(f"**{h['date']}**")
+                 cols[1].text(f"RHR: {h['rhr']}")
+                 cols[2].text(f"HRV: {h['hrv']}")
+                 cols[3].text(f"VO2: {h['vo2Max']}")
+                 cols[4].text(f"Sleep: {h['sleepHours']}")
+                 
+                 with cols[5]:
+                    he, hd = st.columns(2)
+                    if he.button("✏️", key=f"edit_h_{h['id']}"):
+                        st.session_state.edit_hlth_id = h['id']
+                        st.rerun()
+                    if hd.button("🗑️", key=f"del_h_{h['id']}"):
+                        st.session_state.data['health_logs'] = [x for x in st.session_state.data['health_logs'] if x['id'] != h['id']]
+                        persist()
+                        st.rerun()
             
     else:
         st.info("No health stats logged yet.")
