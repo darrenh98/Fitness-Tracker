@@ -4,7 +4,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
 import copy
 
@@ -254,11 +254,74 @@ def parse_time_input(time_str):
     except:
         return 0.0
 
+def generate_weekly_report(end_date=None):
+    if end_date is None:
+        end_date = datetime.now().date()
+    start_date = end_date - timedelta(days=6) # 7 days total
+    
+    report = [f"📊 **Weekly Training Report**"]
+    report.append(f"📅 {start_date.strftime('%b %d')} - {end_date.strftime('%b %d')}\n")
+    
+    # 1. FIELD ACTIVITIES
+    runs = st.session_state.data['runs']
+    # Filter this week's runs
+    weekly_runs = [r for r in runs if start_date <= datetime.strptime(r['date'], '%Y-%m-%d').date() <= end_date]
+    
+    if weekly_runs:
+        total_dist = sum(r['distance'] for r in weekly_runs)
+        total_time = sum(r['duration'] for r in weekly_runs)
+        report.append(f"👟 **FIELD ({len(weekly_runs)} sessions)**")
+        report.append(f"Total Dist: {total_dist:.1f} km | Time: {format_duration(total_time)}")
+        for r in weekly_runs:
+            feel = f"({r.get('feel')})" if r.get('feel') else ""
+            report.append(f"- {r['date'][5:]}: {r['type']} {r['distance']}km @ {format_duration(r['duration'])} {feel}")
+    else:
+        report.append("👟 **FIELD**: No activities.")
+        
+    report.append("") 
+
+    # 2. GYM SESSIONS
+    gyms = st.session_state.data['gym_sessions']
+    weekly_gyms = [g for g in gyms if start_date <= datetime.strptime(g['date'], '%Y-%m-%d').date() <= end_date]
+    
+    if weekly_gyms:
+        report.append(f"💪 **GYM ({len(weekly_gyms)} sessions)**")
+        for g in weekly_gyms:
+            report.append(f"- {g['date'][5:]}: {g['routineName']} (Vol: {g.get('totalVolume',0):.0f}kg)")
+    else:
+        report.append("💪 **GYM**: No sessions.")
+        
+    report.append("")
+
+    # 3. STATS SUMMARY (Average)
+    stats = st.session_state.data['health_logs']
+    weekly_stats = [s for s in stats if start_date <= datetime.strptime(s['date'], '%Y-%m-%d').date() <= end_date]
+    
+    if weekly_stats:
+        avg_rhr = sum(s['rhr'] for s in weekly_stats) / len(weekly_stats)
+        avg_hrv = sum(s['hrv'] for s in weekly_stats) / len(weekly_stats)
+        avg_sleep = sum(s['sleepHours'] for s in weekly_stats) / len(weekly_stats)
+        
+        report.append(f"❤️ **RECOVERY (Avg)**")
+        report.append(f"Sleep: {avg_sleep:.1f}h | HRV: {int(avg_hrv)} | RHR: {int(avg_rhr)}")
+    
+    return "\n".join(report)
+
 # --- Sidebar Navigation ---
 with st.sidebar:
     st.title(":material/sprint: RunLog Hub")
     selected_tab = st.radio("Navigate", ["Plan", "Field (Runs)", "Gym", "Nutrition", "Stats"], label_visibility="collapsed")
     st.divider()
+    
+    # Export Section
+    with st.expander("📤 Share Report"):
+        st.caption("Generate a text summary for your coach.")
+        # Default to today, but allow picking a past week end date
+        report_date = st.date_input("Week Ending", datetime.now())
+        if st.button("Generate Report", use_container_width=True):
+            report_text = generate_weekly_report(report_date)
+            st.code(report_text, language="text")
+            
     with st.expander("👤 Athlete Profile"):
         prof = st.session_state.data['user_profile']
         c1, c2 = st.columns(2)
