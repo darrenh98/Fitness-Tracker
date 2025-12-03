@@ -221,29 +221,32 @@ elif selected_tab == "Field (Runs)":
     runs_df = pd.DataFrame(st.session_state.data['runs'])
     
     if not runs_df.empty:
+        st.subheader("📊 Dashboard")
+        
         # Filter Logic
-        st.divider()
-        filter_type = st.radio("Filter:", ["All", "Run", "Walk", "Ultimate"], horizontal=True)
+        filter_type = st.radio("Activity Filter:", ["All", "Run", "Walk", "Ultimate"], horizontal=True, label_visibility="visible")
+        
         if filter_type != "All":
             filtered_df = runs_df[runs_df['type'] == filter_type]
         else:
             filtered_df = runs_df
 
-        m1, m2, m3, m4 = st.columns(4)
+        # Calculations
         total_dist = filtered_df['distance'].sum()
+        total_mins = filtered_df['duration'].sum()
         count = len(filtered_df)
+        avg_hr = filtered_df['avgHr'].mean() if not filtered_df.empty else 0
         
-        last_run = filtered_df.iloc[0] if not filtered_df.empty else None
-        
+        # Format Time (Decimal mins to HH:MM)
+        t_hours = int(total_mins // 60)
+        t_mins = int(total_mins % 60)
+        time_label = f"{t_hours}h {t_mins}m"
+
+        # Stats Cards
+        m1, m2, m3, m4 = st.columns(4)
         m1.metric("Total Distance", f"{total_dist:.1f} km")
-        
-        pace_label = "-"
-        if last_run is not None and last_run['distance'] > 0:
-            pace_val = last_run['duration'] / last_run['distance']
-            pace_label = format_pace(pace_val) + "/km"
-            
-        m2.metric("Last Pace", pace_label)
-        m3.metric("Avg HR (Last)", f"{last_run['avgHr']} bpm" if last_run is not None else "-")
+        m2.metric("Total Time", time_label)
+        m3.metric("Avg HR", f"{int(avg_hr)} bpm")
         m4.metric("Count", count)
 
         # Data Table
@@ -253,7 +256,7 @@ elif selected_tab == "Field (Runs)":
         display_df = filtered_df.copy()
         display_df['duration_fmt'] = display_df['duration'].apply(format_pace)
         
-        # Optional: Add column for zones string if needed, currently keeping it clean
+        # Display Columns
         display_df = display_df[['date', 'type', 'distance', 'duration_fmt', 'avgHr', 'notes']]
         display_df.columns = ['Date', 'Type', 'Dist (km)', 'Time', 'HR', 'Notes']
         
