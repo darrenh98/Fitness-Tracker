@@ -460,11 +460,11 @@ elif selected_tab == "Field (Runs)":
                         # Actions
                         with c_act:
                             b1, b2 = st.columns(2)
-                            # Append idx to keys to prevent DuplicateElementKey error if IDs duplicate
-                            if b1.button("✏️", key=f"ed_{row['id']}_{idx}"):
+                            # Append idx AND filter_cat to keys to ensure uniqueness across tabs and duplicate rows
+                            if b1.button("✏️", key=f"ed_{row['id']}_{idx}_{filter_cat}"):
                                 st.session_state.edit_run_id = row['id']
                                 st.rerun()
-                            if b2.button("🗑️", key=f"del_{row['id']}_{idx}"):
+                            if b2.button("🗑️", key=f"del_{row['id']}_{idx}_{filter_cat}"):
                                 st.session_state.data['runs'] = [r for r in st.session_state.data['runs'] if r['id'] != row['id']]
                                 persist()
                                 st.rerun()
