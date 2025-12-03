@@ -6,6 +6,7 @@ import json
 import os
 from datetime import datetime
 import time
+import copy
 
 # --- Configuration & Styling ---
 st.set_page_config(
@@ -204,6 +205,23 @@ def get_last_run_defaults(activity_type):
     dur = float(last.get('duration', 30.0))
     hr = int(last.get('avgHr', 140))
     return dist, dur, hr
+
+def get_last_lift_stats(ex_name):
+    """Finds the last set data for a specific exercise"""
+    sessions = st.session_state.data.get('gym_sessions', [])
+    if not sessions:
+        return None
+        
+    # Sessions are already sorted newest first usually, but let's be sure
+    # Assuming index 0 is newest
+    for s in sessions:
+        for ex in s['exercises']:
+            if ex['name'].lower() == ex_name.lower():
+                # Found it
+                # Format: "Last: 100kg x 5, 100kg x 5"
+                sets_str = ", ".join([f"{s['reps']}x{s['weight']}kg" for s in ex['sets']])
+                return sets_str
+    return None
 
 # --- Helper Functions ---
 def format_pace(decimal_min):
@@ -439,19 +457,12 @@ elif selected_tab == "Field (Runs)":
             st.divider()
 
             if not filtered_df.empty:
-                # Optimized for Mobile: Fewer columns
                 for idx, row in filtered_df.iterrows():
                     with st.container():
-                        # Mobile Layout: Date/Type | Stats | HR/Notes | Actions
                         c_main, c_stats, c_extra, c_act = st.columns([2, 3, 2, 1.5])
-                        
                         icon_map = {"Run": "🏃", "Walk": "🚶", "Ultimate": "🥏"}
-                        
-                        # Col 1: Date & Type
                         c_main.markdown(f"**{row['date']}**")
                         c_main.markdown(f"{icon_map.get(row['type'], 'activity')} {row['type']}")
-                        
-                        # Col 2: Consolidated Stats
                         stats_html = f"""
                         <div style="line-height: 1.4;">
                             <span class="history-sub">Dist:</span> <span class="history-value">{row['distance']}km</span><br>
@@ -461,8 +472,6 @@ elif selected_tab == "Field (Runs)":
                         </div>
                         """
                         c_stats.markdown(stats_html, unsafe_allow_html=True)
-                        
-                        # Col 3: HR & Feel
                         feel_val = row.get('feel', '')
                         feel_emoji = {"Good": "😊", "Normal": "😐", "Tired": "😫", "Pain": "🤕"}.get(feel_val, "")
                         hr_html = f"""
@@ -472,8 +481,6 @@ elif selected_tab == "Field (Runs)":
                         </div>
                         """
                         c_extra.markdown(hr_html, unsafe_allow_html=True)
-                        
-                        # Col 4: Actions
                         with c_act:
                             if st.button("✏️", key=f"ed_{row['id']}_{idx}_{filter_cat}"):
                                 st.session_state.edit_run_id = row['id']
@@ -488,81 +495,240 @@ elif selected_tab == "Field (Runs)":
 # --- TAB: GYM ---
 elif selected_tab == "Gym":
     st.header("💪 Gym & Weights")
-    tab_log, tab_routines, tab_history = st.tabs(["Log Session", "Routines", "History"])
-    with tab_routines:
-        st.subheader("Manage Routines")
-        with st.form("new_routine"):
-            r_name = st.text_input("Routine Name (e.g., Pull Day)")
-            r_exs = st.text_area("Exercises (comma separated)", placeholder="Pullups, Rows, Curls")
-            if st.form_submit_button("Create Routine"):
-                ex_list = [x.strip() for x in r_exs.split(",") if x.strip()]
-                new_r = {"id": int(time.time()), "name": r_name, "exercises": ex_list}
-                st.session_state.data['routines'].append(new_r)
-                persist()
-                st.success("Routine Created!")
-                st.rerun()
-        for r in st.session_state.data['routines']:
-            with st.container(border=True):
-                c1, c2 = st.columns([5, 1])
-                c1.markdown(f"**{r['name']}**")
-                c1.caption(" • ".join(r['exercises']))
-                if c2.button("🗑️", key=f"del_rout_{r['id']}"):
-                    st.session_state.data['routines'] = [x for x in st.session_state.data['routines'] if x['id'] != r['id']]
-                    persist()
-                    st.rerun()
+    
+    # Initialize active workout session state
+    if 'active_workout' not in st.session_state:
+        st.session_state.active_workout = None
+    
+    # Save Dialog State
+    if 'gym_save_dialog' not in st.session_state:
+        st.session_state.gym_save_dialog = False
 
-    with tab_log:
-        routine_opts = {r['name']: r for r in st.session_state.data['routines']}
-        selected_r_name = st.selectbox("Select Routine", list(routine_opts.keys()))
-        if selected_r_name:
-            sel_routine = routine_opts[selected_r_name]
-            with st.form("gym_log"):
-                st.subheader(f"Logging: {sel_routine['name']}")
-                log_date = st.date_input("Date", datetime.now())
-                exercises_data = []
-                for ex in sel_routine['exercises']:
-                    st.markdown(f"**{ex}**")
-                    c1, c2 = st.columns(2)
-                    w = c1.text_input(f"Weight ({ex})", placeholder="100, 100, 100", help="Comma separated for sets", label_visibility="collapsed")
-                    r = c2.text_input(f"Reps ({ex})", placeholder="10, 8, 8", help="Comma separated for sets", label_visibility="collapsed")
-                    exercises_data.append({"name": ex, "weights": w, "reps": r})
-                if st.form_submit_button("Complete Workout"):
-                    processed_exs = []
-                    total_vol = 0
-                    for item in exercises_data:
-                        ws = [float(x) for x in item['weights'].split(",") if x.strip()]
-                        rs = [float(x) for x in item['reps'].split(",") if x.strip()]
-                        sets_data = []
-                        for i in range(min(len(ws), len(rs))):
-                            sets_data.append({"weight": ws[i], "reps": rs[i]})
-                            total_vol += ws[i] * rs[i]
-                        if sets_data: processed_exs.append({"name": item['name'], "sets": sets_data})
-                    new_session = {"id": int(time.time()), "date": str(log_date), "routineName": selected_r_name, "exercises": processed_exs, "totalVolume": total_vol}
-                    st.session_state.data['gym_sessions'].insert(0, new_session)
-                    persist()
-                    st.success("Workout Saved!")
+    # --- Mode 1: Selection Screen ---
+    if st.session_state.active_workout is None and not st.session_state.gym_save_dialog:
+        col_rout, col_hist = st.tabs(["Start Workout", "History"])
+        
+        with col_rout:
+            st.subheader("Start from Routine")
+            routine_opts = {r['name']: r for r in st.session_state.data['routines']}
+            
+            if routine_opts:
+                sel_r_name = st.selectbox("Select Routine", list(routine_opts.keys()))
+                if st.button("🚀 Start Workout", use_container_width=True):
+                    # Deep copy routine to active state
+                    selected = routine_opts[sel_r_name]
+                    # Transform structure for active logging: Add sets array
+                    exercises_prep = []
+                    for ex_name in selected['exercises']:
+                        exercises_prep.append({
+                            "name": ex_name,
+                            "sets": [{"reps": "", "weight": ""} for _ in range(3)] # Default 3 empty sets
+                        })
+                    
+                    st.session_state.active_workout = {
+                        "routine_id": selected['id'],
+                        "routine_name": selected['name'],
+                        "date": datetime.now().date(),
+                        "exercises": exercises_prep
+                    }
                     st.rerun()
+            else:
+                st.info("No routines found. Create one below.")
 
-    with tab_history:
-        sessions = st.session_state.data['gym_sessions']
-        if sessions:
-            total_vol_all = sum(s.get('totalVolume', 0) for s in sessions)
-            with st.container(border=True): st.metric("Total Volume Lifted", f"{total_vol_all/1000:.1f}k kg")
             st.divider()
-            for s in sessions:
-                with st.container():
-                    c1, c2, c3 = st.columns([3, 4, 1])
-                    c1.markdown(f"**{s['date']}**")
-                    c1.caption(s['routineName'])
-                    details = ", ".join([f"{ex['name']} ({len(ex['sets'])})" for ex in s['exercises']])
-                    c2.caption(details)
-                    c2.text(f"Vol: {s.get('totalVolume',0)}kg")
-                    if c3.button("🗑️", key=f"del_sess_{s['id']}"):
-                        st.session_state.data['gym_sessions'] = [x for x in st.session_state.data['gym_sessions'] if x['id'] != s['id']]
+            with st.expander("Manage Routines"):
+                with st.form("new_routine"):
+                    r_name = st.text_input("Routine Name (e.g., Pull Day)")
+                    r_exs = st.text_area("Exercises (comma separated)", placeholder="Pullups, Rows, Curls")
+                    if st.form_submit_button("Create Routine"):
+                        ex_list = [x.strip() for x in r_exs.split(",") if x.strip()]
+                        new_r = {"id": int(time.time()), "name": r_name, "exercises": ex_list}
+                        st.session_state.data['routines'].append(new_r)
+                        persist()
+                        st.success("Routine Created!")
+                        st.rerun()
+                
+                for r in st.session_state.data['routines']:
+                    c1, c2 = st.columns([5, 1])
+                    c1.markdown(f"**{r['name']}**")
+                    c1.caption(" • ".join(r['exercises']))
+                    if c2.button("🗑️", key=f"del_rout_{r['id']}"):
+                        st.session_state.data['routines'] = [x for x in st.session_state.data['routines'] if x['id'] != r['id']]
                         persist()
                         st.rerun()
-        else:
-            st.info("No gym sessions logged.")
+
+        with col_hist:
+            sessions = st.session_state.data['gym_sessions']
+            if sessions:
+                total_vol_all = sum(s.get('totalVolume', 0) for s in sessions)
+                with st.container(border=True): st.metric("Total Volume Lifted", f"{total_vol_all/1000:.1f}k kg")
+                st.divider()
+                for s in sessions:
+                    with st.container():
+                        c1, c2, c3 = st.columns([3, 4, 1])
+                        c1.markdown(f"**{s['date']}**")
+                        c1.caption(s['routineName'])
+                        details = ", ".join([f"{ex['name']} ({len(ex['sets'])})" for ex in s['exercises']])
+                        c2.caption(details)
+                        c2.text(f"Vol: {s.get('totalVolume',0)}kg")
+                        if c3.button("🗑️", key=f"del_sess_{s['id']}"):
+                            st.session_state.data['gym_sessions'] = [x for x in st.session_state.data['gym_sessions'] if x['id'] != s['id']]
+                            persist()
+                            st.rerun()
+            else:
+                st.info("No gym sessions logged.")
+
+    # --- Mode 2: Active Logging Screen ---
+    elif st.session_state.active_workout is not None and not st.session_state.gym_save_dialog:
+        aw = st.session_state.active_workout
+        
+        # Header
+        c_head, c_canc = st.columns([3, 1])
+        c_head.subheader(f"💪 {aw['routine_name']}")
+        if c_canc.button("Cancel"):
+            st.session_state.active_workout = None
+            st.rerun()
+            
+        aw['date'] = st.date_input("Date", aw['date'])
+        
+        st.divider()
+        
+        # Exercises Loop
+        # We iterate by index to modify in place
+        exercises_to_remove = []
+        
+        for i, ex in enumerate(aw['exercises']):
+            with st.container(border=True):
+                # Header Row: Name | History | Remove
+                ch1, ch2, ch3 = st.columns([3, 3, 1])
+                new_name = ch1.text_input(f"Exercise {i+1}", value=ex['name'], key=f"ex_name_{i}")
+                ex['name'] = new_name
+                
+                # History Lookup
+                last_stats = get_last_lift_stats(new_name)
+                if last_stats:
+                    ch2.info(f"Last: {last_stats}")
+                else:
+                    ch2.caption("No history found")
+                    
+                if ch3.button("🗑️ Ex", key=f"del_ex_{i}"):
+                    exercises_to_remove.append(i)
+                
+                # Sets Header
+                st.markdown(f"""
+                <div style="display:grid; grid-template-columns: 1fr 1fr 0.5fr; gap:10px; font-size:0.8rem; font-weight:600; color:#64748b; margin-bottom:5px;">
+                    <div>REPS</div><div>WEIGHT (kg)</div><div></div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Sets Loop
+                sets_to_remove = []
+                for j, s in enumerate(ex['sets']):
+                    c_reps, c_w, c_del = st.columns([1, 1, 0.5])
+                    s['reps'] = c_reps.text_input("Reps", value=s['reps'], key=f"r_{i}_{j}", label_visibility="collapsed", placeholder="10")
+                    s['weight'] = c_w.text_input("Weight", value=s['weight'], key=f"w_{i}_{j}", label_visibility="collapsed", placeholder="50")
+                    if c_del.button("✕", key=f"del_set_{i}_{j}"):
+                        sets_to_remove.append(j)
+                
+                # Process Set Deletions
+                if sets_to_remove:
+                    for index in sorted(sets_to_remove, reverse=True):
+                        del ex['sets'][index]
+                    st.rerun()
+                
+                # Add Set Button
+                if st.button(f"➕ Add Set", key=f"add_set_{i}"):
+                    ex['sets'].append({"reps": "", "weight": ""})
+                    st.rerun()
+
+        # Process Exercise Deletions
+        if exercises_to_remove:
+            for index in sorted(exercises_to_remove, reverse=True):
+                del aw['exercises'][index]
+            st.rerun()
+
+        # Add New Exercise Button
+        if st.button("➕ Add New Exercise"):
+            aw['exercises'].append({"name": "New Exercise", "sets": [{"reps": "", "weight": ""} for _ in range(3)]})
+            st.rerun()
+            
+        st.divider()
+        if st.button("✅ Finish Workout", type="primary", use_container_width=True):
+            st.session_state.gym_save_dialog = True
+            st.rerun()
+
+    # --- Mode 3: Save Dialog ---
+    elif st.session_state.gym_save_dialog:
+        st.subheader("🎉 Workout Complete!")
+        st.info("You modified the routine structure. Would you like to update the original routine?")
+        
+        aw = st.session_state.active_workout
+        
+        c1, c2 = st.columns(2)
+        
+        # Calculate Volume & Clean Data
+        final_exercises = []
+        total_vol = 0
+        current_ex_names = []
+        
+        for ex in aw['exercises']:
+            clean_sets = []
+            for s in ex['sets']:
+                # Basic validation: check if valid numbers
+                try:
+                    r_val = float(s['reps'])
+                    w_val = float(s['weight'])
+                    clean_sets.append({"reps": s['reps'], "weight": s['weight']}) # Store as string for flexibility, calc with float
+                    total_vol += r_val * w_val
+                except:
+                    continue # Skip empty/invalid sets
+            
+            if clean_sets: # Only save exercises with valid sets
+                final_exercises.append({
+                    "name": ex['name'],
+                    "sets": clean_sets
+                })
+                current_ex_names.append(ex['name'])
+
+        new_session = {
+            "id": int(time.time()),
+            "date": str(aw['date']),
+            "routineName": aw['routine_name'],
+            "exercises": final_exercises,
+            "totalVolume": total_vol
+        }
+
+        # Option 1: Update Routine
+        if c1.button("Save & Update Routine"):
+            # Update Routine Definition
+            for r in st.session_state.data['routines']:
+                if r['id'] == aw['routine_id']:
+                    r['exercises'] = current_ex_names
+                    break
+            
+            # Save Session
+            st.session_state.data['gym_sessions'].insert(0, new_session)
+            persist()
+            
+            # Reset State
+            st.session_state.active_workout = None
+            st.session_state.gym_save_dialog = False
+            st.success("Routine updated and workout logged!")
+            st.rerun()
+
+        # Option 2: Just Save
+        if c2.button("Just Save Session"):
+            st.session_state.data['gym_sessions'].insert(0, new_session)
+            persist()
+            
+            st.session_state.active_workout = None
+            st.session_state.gym_save_dialog = False
+            st.success("Workout logged!")
+            st.rerun()
+            
+        if st.button("Go Back"):
+            st.session_state.gym_save_dialog = False
+            st.rerun()
 
 # --- TAB: NUTRITION ---
 elif selected_tab == "Nutrition":
