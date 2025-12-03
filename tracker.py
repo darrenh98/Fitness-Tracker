@@ -214,16 +214,19 @@ def persist():
 # --- Smart Defaults Helper ---
 def get_last_run_defaults(activity_type):
     runs = st.session_state.data.get('runs', [])
+    # Default: Dist, Dur, HR, Cadence, Power
     if not runs:
-        return 5.0, 30.0, 140
+        return 5.0, 30.0, 140, 170, 200
     type_runs = [r for r in runs if r.get('type') == activity_type]
     if not type_runs:
-        return 5.0, 30.0, 140
+        return 5.0, 30.0, 140, 170, 200
     last = type_runs[0]
     dist = float(last.get('distance', 5.0))
     dur = float(last.get('duration', 30.0))
     hr = int(last.get('avgHr', 140))
-    return dist, dur, hr
+    cad = int(last.get('cadence', 170))
+    pwr = int(last.get('power', 200))
+    return dist, dur, hr, cad, pwr
 
 def get_last_lift_stats(ex_name):
     """Finds the last set data for a specific exercise"""
@@ -314,8 +317,10 @@ def generate_report(start_date, end_date, selected_cats):
                 
                 report.append(line)
                 
-                # Detailed Notes/Zones line
+                # Detailed Notes/Zones/Metrics line
                 details = []
+                if r.get('cadence', 0) > 0: details.append(f"Cad: {r['cadence']}")
+                if r.get('power', 0) > 0: details.append(f"Pwr: {r['power']}w")
                 if r.get('notes'): details.append(f"📝 {r['notes']}")
                 
                 # Add zones if they exist and are non-zero
@@ -425,10 +430,12 @@ elif selected_tab == "Field (Runs)":
     edit_run_id = st.session_state.get('edit_run_id', None)
     if 'form_act_type' not in st.session_state: st.session_state.form_act_type = "Run"
     
-    sd_dist, sd_dur, sd_hr = get_last_run_defaults(st.session_state.form_act_type)
+    # Get defaults (now includes Cadence/Power)
+    sd_dist, sd_dur, sd_hr, sd_cad, sd_pwr = get_last_run_defaults(st.session_state.form_act_type)
     
     def_type = st.session_state.form_act_type
     def_date, def_dist, def_dur, def_hr, def_notes, def_feel, def_rpe = datetime.now(), sd_dist, sd_dur, sd_hr, "", "Normal", 5
+    def_cad, def_pwr = sd_cad, sd_pwr
     def_z1, def_z2, def_z3, def_z4, def_z5 = "", "", "", "", ""
     
     if edit_run_id:
@@ -442,6 +449,8 @@ elif selected_tab == "Field (Runs)":
             def_notes = run_data.get('notes', '')
             def_feel = run_data.get('feel', 'Normal')
             def_rpe = run_data.get('rpe', 5)
+            def_cad = run_data.get('cadence', 0)
+            def_pwr = run_data.get('power', 0)
             def_z1 = format_duration(run_data.get('z1', 0))
             def_z2 = format_duration(run_data.get('z2', 0))
             def_z3 = format_duration(run_data.get('z3', 0))
@@ -449,6 +458,7 @@ elif selected_tab == "Field (Runs)":
             def_z5 = format_duration(run_data.get('z5', 0))
 
     form_label = f":material/edit: Edit Activity" if edit_run_id else ":material/add_circle: Log Activity"
+    # Auto-collapse when not editing
     expander_state = True if edit_run_id else False
 
     with st.expander(form_label, expanded=expander_state):
@@ -466,7 +476,8 @@ elif selected_tab == "Field (Runs)":
                     def_notes = t_data.get('notes', "")
                     st.session_state.form_act_type = def_type
 
-        with st.form("run_form"):
+        # Add clear_on_submit=True to reset inputs after saving
+        with st.form("run_form", clear_on_submit=True):
             st.caption("Activity Type")
             act_type = st.radio("Type", ["Run", "Walk", "Ultimate"], index=["Run", "Walk", "Ultimate"].index(def_type) if def_type in ["Run", "Walk", "Ultimate"] else 0, key="act_type_radio", horizontal=True, label_visibility="collapsed")
             c1, c2 = st.columns(2)
@@ -476,13 +487,22 @@ elif selected_tab == "Field (Runs)":
             with c2:
                 st.caption("Duration (hh:mm:ss)")
                 dur_str = st.text_input("Duration", value=format_duration(def_dur), placeholder="00:30:00", label_visibility="collapsed")
-            c3, c4 = st.columns(2)
+            
+            # Row 3: HR, RPE, Cadence, Power
+            c3, c4, c5, c6 = st.columns(4)
             with c3:
                 st.caption("Avg HR")
                 hr = st.number_input("Heart Rate", min_value=0, value=int(def_hr), label_visibility="collapsed")
             with c4:
                 st.caption("RPE (1-10)")
                 rpe = st.number_input("RPE", min_value=1, max_value=10, value=int(def_rpe), label_visibility="collapsed")
+            with c5:
+                st.caption("Cadence (spm)")
+                cadence = st.number_input("Cadence", min_value=0, value=int(def_cad), label_visibility="collapsed")
+            with c6:
+                st.caption("Power (w)")
+                power = st.number_input("Power", min_value=0, value=int(def_pwr), label_visibility="collapsed")
+
             st.caption("Heart Rate Zones (Time in mm:ss)")
             rc1, rc2, rc3, rc4, rc5 = st.columns(5)
             z1 = rc1.text_input("Zone 1", value=def_z1, placeholder="00:00")
@@ -490,23 +510,32 @@ elif selected_tab == "Field (Runs)":
             z3 = rc3.text_input("Zone 3", value=def_z3, placeholder="00:00")
             z4 = rc4.text_input("Zone 4", value=def_z4, placeholder="00:00")
             z5 = rc5.text_input("Zone 5", value=def_z5, placeholder="00:00")
-            c5, c6 = st.columns(2)
-            with c5:
+            
+            c_feel, c_date = st.columns(2)
+            with c_feel:
                 st.caption("How did it feel?")
                 feel = st.radio("Feel", ["Good", "Normal", "Tired", "Pain"], index=["Good", "Normal", "Tired", "Pain"].index(def_feel) if def_feel in ["Good", "Normal", "Tired", "Pain"] else 1, horizontal=True, label_visibility="collapsed")
-            with c6:
+            with c_date:
                 st.caption("Date")
                 act_date = st.date_input("Date", def_date, label_visibility="collapsed")
+            
             st.caption("Notes")
             notes = st.text_area("Notes", value=def_notes, placeholder="Easy run, felt strong...", height=3, label_visibility="collapsed")
+            
             btn_text = "Update Activity" if edit_run_id else "Save Activity"
+            
+            # Submit Logic
             if st.form_submit_button(btn_text):
                 new_id = int(time.time() * 1000)
                 run_obj = {
                     "id": edit_run_id if edit_run_id else new_id,
-                    "date": str(act_date), "type": act_type, "distance": dist, "duration": parse_time_input(dur_str),
-                    "avgHr": hr, "rpe": rpe, "feel": feel, "z1": parse_time_input(z1), "z2": parse_time_input(z2),
-                    "z3": parse_time_input(z3), "z4": parse_time_input(z4), "z5": parse_time_input(z5), "notes": notes
+                    "date": str(act_date), "type": act_type, "distance": dist, 
+                    "duration": parse_time_input(dur_str),
+                    "avgHr": hr, "rpe": rpe, "feel": feel, 
+                    "cadence": cadence, "power": power, # New fields
+                    "z1": parse_time_input(z1), "z2": parse_time_input(z2),
+                    "z3": parse_time_input(z3), "z4": parse_time_input(z4), "z5": parse_time_input(z5), 
+                    "notes": notes
                 }
                 if edit_run_id:
                     idx = next((i for i, r in enumerate(st.session_state.data['runs']) if r['id'] == edit_run_id), -1)
@@ -516,8 +545,10 @@ elif selected_tab == "Field (Runs)":
                 else:
                     st.session_state.data['runs'].insert(0, run_obj)
                     st.success("Activity Logged!")
+                
                 persist()
                 st.rerun()
+                
         if not edit_run_id:
             with st.popover(":material/save: Save as Template"):
                 tpl_name = st.text_input("Template Name", placeholder="Morning 5k")
@@ -607,11 +638,14 @@ elif selected_tab == "Field (Runs)":
                                 persist()
                                 st.rerun()
                         
-                        # Details Expander
+                        # Details Expander with new data
                         with st.expander("See Details", expanded=False):
                              dc1, dc2 = st.columns(2)
                              with dc1:
                                  st.markdown(f"**Notes:** {row.get('notes', '-')}")
+                                 # Show Cadence/Power here
+                                 if row.get('cadence', 0) > 0 or row.get('power', 0) > 0:
+                                     st.caption(f"**Cadence:** {row.get('cadence','-')} spm | **Power:** {row.get('power','-')} w")
                              with dc2:
                                  zones = []
                                  for z in range(1, 6):
@@ -985,14 +1019,12 @@ elif selected_tab == "Share":
         # 2. Category Selection (Custom Chips UI)
         st.markdown("**Include Data:**")
         
-        # Helper to manage selection state without multiselect widget
         if 'share_cats' not in st.session_state:
             st.session_state.share_cats = ["Run", "Walk", "Ultimate", "Gym", "Stats"]
             
         all_cats = ["Run", "Walk", "Ultimate", "Gym", "Stats"]
         cols = st.columns(len(all_cats))
         
-        # Create toggle buttons behaving like chips
         for i, cat in enumerate(all_cats):
             is_selected = cat in st.session_state.share_cats
             if cols[i].checkbox(cat, value=is_selected, key=f"share_{cat}"):
