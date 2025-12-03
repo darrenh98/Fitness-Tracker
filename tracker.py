@@ -11,7 +11,7 @@ import copy
 # --- Configuration & Styling ---
 st.set_page_config(
     page_title="RunLog Hub",
-    page_icon="🏃",
+    page_icon=":material/sprint:", # Browser tab icon
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -256,7 +256,7 @@ def parse_time_input(time_str):
 
 # --- Sidebar Navigation ---
 with st.sidebar:
-    st.title("🏃 RunLog Hub")
+    st.title(":material/sprint: RunLog Hub")
     selected_tab = st.radio("Navigate", ["Plan", "Field (Runs)", "Gym", "Nutrition", "Stats"], label_visibility="collapsed")
     st.divider()
     with st.expander("👤 Athlete Profile"):
@@ -272,7 +272,7 @@ with st.sidebar:
 
 # --- TAB: PLAN ---
 if selected_tab == "Plan":
-    st.header("📅 Training Plan")
+    st.header(":material/calendar_month: Training Plan")
     c1, c2, c3 = st.columns(3)
     with c1:
         st.container(border=True).markdown("**Macrocycle (Annual)**")
@@ -309,7 +309,7 @@ if selected_tab == "Plan":
 
 # --- TAB: FIELD (RUNS) ---
 elif selected_tab == "Field (Runs)":
-    st.header("👟 Field Activities")
+    st.header(":material/directions_run: Field Activities")
     runs_df = pd.DataFrame(st.session_state.data['runs'])
     
     edit_run_id = st.session_state.get('edit_run_id', None)
@@ -338,7 +338,7 @@ elif selected_tab == "Field (Runs)":
             def_z4 = format_duration(run_data.get('z4', 0))
             def_z5 = format_duration(run_data.get('z5', 0))
 
-    form_label = f"✏️ Edit Activity" if edit_run_id else "➕ Log Activity"
+    form_label = f":material/edit: Edit Activity" if edit_run_id else ":material/add_circle: Log Activity"
     expander_state = True if edit_run_id else False
 
     with st.expander(form_label, expanded=expander_state):
@@ -347,7 +347,7 @@ elif selected_tab == "Field (Runs)":
             with col_t1:
                 templates = st.session_state.data.get('templates', {})
                 template_names = ["None"] + list(templates.keys())
-                sel_template = st.selectbox("📂 Load Template", template_names, label_visibility="collapsed")
+                sel_template = st.selectbox(":material/folder_open: Load Template", template_names, label_visibility="collapsed")
                 if sel_template != "None":
                     t_data = templates[sel_template]
                     def_type = t_data.get('type', "Run")
@@ -409,7 +409,7 @@ elif selected_tab == "Field (Runs)":
                 persist()
                 st.rerun()
         if not edit_run_id:
-            with st.popover("💾 Save as Template"):
+            with st.popover(":material/save: Save as Template"):
                 tpl_name = st.text_input("Template Name", placeholder="Morning 5k")
                 if st.button("Save Template"):
                     if tpl_name:
@@ -460,9 +460,9 @@ elif selected_tab == "Field (Runs)":
                 for idx, row in filtered_df.iterrows():
                     with st.container():
                         c_main, c_stats, c_extra, c_act = st.columns([2, 3, 2, 1.5])
-                        icon_map = {"Run": "🏃", "Walk": "🚶", "Ultimate": "🥏"}
+                        icon_map = {"Run": ":material/directions_run:", "Walk": ":material/directions_walk:", "Ultimate": ":material/sports_handball:"}
                         c_main.markdown(f"**{row['date']}**")
-                        c_main.markdown(f"{icon_map.get(row['type'], 'activity')} {row['type']}")
+                        c_main.markdown(f"{icon_map.get(row['type'], ':material/help:')} {row['type']}")
                         stats_html = f"""
                         <div style="line-height: 1.4;">
                             <span class="history-sub">Dist:</span> <span class="history-value">{row['distance']}km</span><br>
@@ -473,7 +473,7 @@ elif selected_tab == "Field (Runs)":
                         """
                         c_stats.markdown(stats_html, unsafe_allow_html=True)
                         feel_val = row.get('feel', '')
-                        feel_emoji = {"Good": "😊", "Normal": "😐", "Tired": "😫", "Pain": "🤕"}.get(feel_val, "")
+                        feel_emoji = {"Good": ":material/sentiment_satisfied:", "Normal": ":material/sentiment_neutral:", "Tired": ":material/sentiment_dissatisfied:", "Pain": ":material/sick:"}.get(feel_val, "")
                         hr_html = f"""
                         <div style="line-height: 1.4;">
                             <span class="history-sub">HR:</span> <span class="history-value">{row['avgHr'] if row['avgHr']>0 else '-'}</span><br>
@@ -482,10 +482,10 @@ elif selected_tab == "Field (Runs)":
                         """
                         c_extra.markdown(hr_html, unsafe_allow_html=True)
                         with c_act:
-                            if st.button("✏️", key=f"ed_{row['id']}_{idx}_{filter_cat}"):
+                            if st.button(":material/edit:", key=f"ed_{row['id']}_{idx}_{filter_cat}"):
                                 st.session_state.edit_run_id = row['id']
                                 st.rerun()
-                            if st.button("🗑️", key=f"del_{row['id']}_{idx}_{filter_cat}"):
+                            if st.button(":material/delete:", key=f"del_{row['id']}_{idx}_{filter_cat}"):
                                 st.session_state.data['runs'] = [r for r in st.session_state.data['runs'] if r['id'] != row['id']]
                                 persist()
                                 st.rerun()
@@ -494,7 +494,7 @@ elif selected_tab == "Field (Runs)":
 
 # --- TAB: GYM ---
 elif selected_tab == "Gym":
-    st.header("💪 Gym & Weights")
+    st.header(":material/fitness_center: Gym & Weights")
     
     # Initialize active workout session state
     if 'active_workout' not in st.session_state:
@@ -514,7 +514,7 @@ elif selected_tab == "Gym":
             
             if routine_opts:
                 sel_r_name = st.selectbox("Select Routine", list(routine_opts.keys()))
-                if st.button("🚀 Start Workout", use_container_width=True):
+                if st.button(":material/play_arrow: Start Workout", use_container_width=True):
                     # Deep copy routine to active state
                     selected = routine_opts[sel_r_name]
                     # Transform structure for active logging: Add sets array
@@ -552,7 +552,7 @@ elif selected_tab == "Gym":
                     c1, c2 = st.columns([5, 1])
                     c1.markdown(f"**{r['name']}**")
                     c1.caption(" • ".join(r['exercises']))
-                    if c2.button("🗑️", key=f"del_rout_{r['id']}"):
+                    if c2.button(":material/delete:", key=f"del_rout_{r['id']}"):
                         st.session_state.data['routines'] = [x for x in st.session_state.data['routines'] if x['id'] != r['id']]
                         persist()
                         st.rerun()
@@ -571,7 +571,7 @@ elif selected_tab == "Gym":
                         details = ", ".join([f"{ex['name']} ({len(ex['sets'])})" for ex in s['exercises']])
                         c2.caption(details)
                         c2.text(f"Vol: {s.get('totalVolume',0)}kg")
-                        if c3.button("🗑️", key=f"del_sess_{s['id']}"):
+                        if c3.button(":material/delete:", key=f"del_sess_{s['id']}"):
                             st.session_state.data['gym_sessions'] = [x for x in st.session_state.data['gym_sessions'] if x['id'] != s['id']]
                             persist()
                             st.rerun()
@@ -584,7 +584,7 @@ elif selected_tab == "Gym":
         
         # Header
         c_head, c_canc = st.columns([3, 1])
-        c_head.subheader(f"💪 {aw['routine_name']}")
+        c_head.subheader(f":material/fitness_center: {aw['routine_name']}")
         if c_canc.button("Cancel"):
             st.session_state.active_workout = None
             st.rerun()
@@ -611,7 +611,7 @@ elif selected_tab == "Gym":
                 else:
                     ch2.caption("No history found")
                     
-                if ch3.button("🗑️ Ex", key=f"del_ex_{i}"):
+                if ch3.button(":material/delete:", key=f"del_ex_{i}"):
                     exercises_to_remove.append(i)
                 
                 # Sets Header
@@ -627,7 +627,7 @@ elif selected_tab == "Gym":
                     c_reps, c_w, c_del = st.columns([1, 1, 0.5])
                     s['reps'] = c_reps.text_input("Reps", value=s['reps'], key=f"r_{i}_{j}", label_visibility="collapsed", placeholder="10")
                     s['weight'] = c_w.text_input("Weight", value=s['weight'], key=f"w_{i}_{j}", label_visibility="collapsed", placeholder="50")
-                    if c_del.button("✕", key=f"del_set_{i}_{j}"):
+                    if c_del.button(":material/close:", key=f"del_set_{i}_{j}"):
                         sets_to_remove.append(j)
                 
                 # Process Set Deletions
@@ -637,7 +637,7 @@ elif selected_tab == "Gym":
                     st.rerun()
                 
                 # Add Set Button
-                if st.button(f"➕ Add Set", key=f"add_set_{i}"):
+                if st.button(f":material/add: Add Set", key=f"add_set_{i}"):
                     ex['sets'].append({"reps": "", "weight": ""})
                     st.rerun()
 
@@ -648,12 +648,12 @@ elif selected_tab == "Gym":
             st.rerun()
 
         # Add New Exercise Button
-        if st.button("➕ Add New Exercise"):
+        if st.button(":material/add_circle: Add New Exercise"):
             aw['exercises'].append({"name": "New Exercise", "sets": [{"reps": "", "weight": ""} for _ in range(3)]})
             st.rerun()
             
         st.divider()
-        if st.button("✅ Finish Workout", type="primary", use_container_width=True):
+        if st.button(":material/check_circle: Finish Workout", type="primary", use_container_width=True):
             st.session_state.gym_save_dialog = True
             st.rerun()
 
@@ -699,7 +699,7 @@ elif selected_tab == "Gym":
         }
 
         # Option 1: Update Routine
-        if c1.button("Save & Update Routine"):
+        if c1.button(":material/update: Save & Update Routine"):
             # Update Routine Definition
             for r in st.session_state.data['routines']:
                 if r['id'] == aw['routine_id']:
@@ -717,7 +717,7 @@ elif selected_tab == "Gym":
             st.rerun()
 
         # Option 2: Just Save
-        if c2.button("Just Save Session"):
+        if c2.button(":material/save: Just Save Session"):
             st.session_state.data['gym_sessions'].insert(0, new_session)
             persist()
             
@@ -732,7 +732,7 @@ elif selected_tab == "Gym":
 
 # --- TAB: NUTRITION ---
 elif selected_tab == "Nutrition":
-    st.header("🥗 Nutrition Log")
+    st.header(":material/restaurant: Nutrition Log")
     c1, c2 = st.columns([1, 2])
     edit_nut_id = st.session_state.get('edit_nut_id', None)
     def_nut_date, def_meal, def_cal, def_prot, def_carb, def_fat = datetime.now(), "", 500, 30, 50, 15
@@ -747,7 +747,7 @@ elif selected_tab == "Nutrition":
             def_fat = n_data['fat']
 
     with c1:
-        lbl = "✏️ Edit Meal" if edit_nut_id else "Add Meal"
+        lbl = ":material/edit: Edit Meal" if edit_nut_id else "Add Meal"
         st.subheader(lbl)
         with st.form("food_form"):
             f_date = st.date_input("Date", def_nut_date)
@@ -804,17 +804,17 @@ elif selected_tab == "Nutrition":
                  """
                  nc2.markdown(macro_html, unsafe_allow_html=True)
                  with nc_act:
-                    if st.button("✏️", key=f"edit_nut_{n['id']}"):
+                    if st.button(":material/edit:", key=f"edit_nut_{n['id']}"):
                         st.session_state.edit_nut_id = n['id']
                         st.rerun()
-                    if st.button("🗑️", key=f"del_nut_{n['id']}"):
+                    if st.button(":material/delete:", key=f"del_nut_{n['id']}"):
                         st.session_state.data['nutrition_logs'] = [x for x in st.session_state.data['nutrition_logs'] if x['id'] != n['id']]
                         persist()
                         st.rerun()
 
 # --- TAB: STATS (HEALTH) ---
 elif selected_tab == "Stats":
-    st.header("❤️ Physiological Stats")
+    st.header(":material/favorite: Physiological Stats")
     edit_hlth_id = st.session_state.get('edit_hlth_id', None)
     def_h_date, def_rhr, def_hrv, def_vo2, def_sleep = datetime.now(), 60, 0, 0.0, 0.0
     if edit_hlth_id:
@@ -826,7 +826,7 @@ elif selected_tab == "Stats":
             def_vo2 = h_data['vo2Max']
             def_sleep = h_data['sleepHours']
 
-    lbl_h = "✏️ Edit Stats" if edit_hlth_id else "➕ Log Health Stats"
+    lbl_h = ":material/edit: Edit Stats" if edit_hlth_id else ":material/add_circle: Log Health Stats"
     expanded_h = True if edit_hlth_id else False
 
     with st.expander(lbl_h, expanded=expanded_h):
@@ -894,10 +894,10 @@ elif selected_tab == "Stats":
                  hc2.markdown(stats_str, unsafe_allow_html=True)
                  
                  with hc3:
-                    if st.button("✏️", key=f"edit_h_{row['id']}"):
+                    if st.button(":material/edit:", key=f"edit_h_{row['id']}"):
                         st.session_state.edit_hlth_id = row['id']
                         st.rerun()
-                    if st.button("🗑️", key=f"del_h_{row['id']}"):
+                    if st.button(":material/delete:", key=f"del_h_{row['id']}"):
                         st.session_state.data['health_logs'] = [x for x in st.session_state.data['health_logs'] if x['id'] != row['id']]
                         persist()
                         st.rerun()
