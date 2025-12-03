@@ -20,6 +20,8 @@ st.set_page_config(
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+    /* Import Material Symbols for use in HTML */
+    @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200');
 
     html, body, [class*="css"] {
         font-family: 'Inter', sans-serif;
@@ -28,6 +30,23 @@ st.markdown("""
 
     .stApp {
         background-color: #f8fafc;
+    }
+
+    /* Material Icon Class for HTML usage */
+    .material-symbols-rounded {
+        font-family: 'Material Symbols Rounded';
+        font-weight: normal;
+        font-style: normal;
+        font-size: 1.2rem;
+        line-height: 1;
+        letter-spacing: normal;
+        text-transform: none;
+        display: inline-block;
+        white-space: nowrap;
+        word-wrap: normal;
+        direction: ltr;
+        vertical-align: middle;
+        color: #64748b;
     }
 
     /* Headers */
@@ -581,7 +600,13 @@ elif selected_tab == "Field (Runs)":
                         """
                         c_stats.markdown(stats_html, unsafe_allow_html=True)
                         feel_val = row.get('feel', '')
-                        feel_emoji = {"Good": ":material/sentiment_satisfied:", "Normal": ":material/sentiment_neutral:", "Tired": ":material/sentiment_dissatisfied:", "Pain": ":material/sick:"}.get(feel_val, "")
+                        feel_emoji = {
+                            "Good": '<span class="material-symbols-rounded">sentiment_satisfied</span>',
+                            "Normal": '<span class="material-symbols-rounded">sentiment_neutral</span>',
+                            "Tired": '<span class="material-symbols-rounded">sentiment_dissatisfied</span>',
+                            "Pain": '<span class="material-symbols-rounded">sick</span>'
+                        }.get(feel_val, "")
+                        
                         hr_html = f"""
                         <div style="line-height: 1.4;">
                             <span class="history-sub">HR:</span> <span class="history-value">{row['avgHr'] if row['avgHr']>0 else '-'}</span><br>
