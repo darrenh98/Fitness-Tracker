@@ -585,6 +585,7 @@ elif selected_tab == "Field (Runs)":
                         hr_html = f"""
                         <div style="line-height: 1.4;">
                             <span class="history-sub">HR:</span> <span class="history-value">{row['avgHr'] if row['avgHr']>0 else '-'}</span><br>
+                            <span class="history-sub">RPE:</span> <span class="history-value">{row.get('rpe', '-')}</span><br>
                             <span style="font-size:1.2rem;">{feel_emoji}</span>
                         </div>
                         """
@@ -597,6 +598,21 @@ elif selected_tab == "Field (Runs)":
                                 st.session_state.data['runs'] = [r for r in st.session_state.data['runs'] if r['id'] != row['id']]
                                 persist()
                                 st.rerun()
+                        
+                        # Details Expander
+                        with st.expander("See Details", expanded=False):
+                             dc1, dc2 = st.columns(2)
+                             with dc1:
+                                 st.markdown(f"**Notes:** {row.get('notes', '-')}")
+                             with dc2:
+                                 zones = []
+                                 for z in range(1, 6):
+                                     val = row.get(f'z{z}', 0)
+                                     if val > 0: zones.append(f"**Z{z}:** {format_duration(val)}")
+                                 if zones:
+                                     st.markdown(" | ".join(zones))
+                                 else:
+                                     st.caption("No zone data")
             else:
                 st.info("No activities found for this category.")
 
