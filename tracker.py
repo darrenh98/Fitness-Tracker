@@ -15,30 +15,116 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS to mimic the slate/minimalist look
+# Custom CSS for Modern Minimalist Look
 st.markdown("""
 <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
+
+    html, body, [class*="css"] {
+        font-family: 'Inter', sans-serif;
+        color: #1e293b;
+    }
+
     .stApp {
         background-color: #f8fafc;
     }
-    .stCard {
-        background-color: white;
-        padding: 1.5rem;
-        border-radius: 0.75rem;
-        box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1);
-        border: 1px solid #e2e8f0;
-    }
-    [data-testid="stMetricValue"] {
-        font-size: 1.8rem;
-        font-weight: 700;
+
+    /* Headers */
+    h1, h2, h3 {
+        font-weight: 800 !important;
+        letter-spacing: -0.025em;
         color: #0f172a;
     }
+
+    /* Modern Cards/Containers */
+    .stCard, [data-testid="stForm"] {
+        background-color: #ffffff;
+        padding: 2rem;
+        border-radius: 1rem;
+        /* Soft modern shadow instead of borders */
+        box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05), 0 2px 4px -2px rgb(0 0 0 / 0.05);
+        border: none;
+        transition: box-shadow 0.2s ease-in-out, transform 0.2s ease-in-out;
+    }
+
+    /* subtle hover effect on cards */
+    .stCard:hover {
+         box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.05), 0 4px 6px -4px rgb(0 0 0 / 0.05);
+         transform: translateY(-2px);
+    }
+
+    /* Metrics Styling */
+    [data-testid="stMetricValue"] {
+        font-size: 2rem;
+        font-weight: 800;
+        color: #0f172a;
+        letter-spacing: -0.02em;
+    }
     [data-testid="stMetricLabel"] {
-        font-size: 0.875rem;
-        font-weight: 600;
+        font-size: 0.75rem;
+        font-weight: 700;
         color: #64748b;
         text-transform: uppercase;
-        letter-spacing: 0.05em;
+        letter-spacing: 0.1em;
+    }
+
+    /* Cleaner Tabs */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+        background-color: transparent;
+        margin-bottom: 1.5rem;
+    }
+    .stTabs [data-baseweb="tab"] {
+        height: auto;
+        padding: 10px 20px;
+        border-radius: 12px;
+        font-weight: 600;
+        border: none;
+        background-color: #f1f5f9;
+        color: #64748b;
+        transition: all 0.2s;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #ffffff;
+        color: #0f172a;
+        box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05), 0 2px 4px -2px rgb(0 0 0 / 0.05);
+    }
+
+    /* Inputs and Selects */
+    .stTextInput input, .stNumberInput input, .stSelectbox select, .stDateInput input, .stTextArea textarea {
+        border-radius: 8px;
+        border: 1px solid #e2e8f0;
+        padding: 0.75rem;
+        background-color: #fff;
+    }
+    .stTextInput input:focus, .stNumberInput input:focus, .stSelectbox select:focus, .stDateInput input:focus {
+        border-color: #cbd5e1;
+        box-shadow: 0 0 0 2px rgba(226, 232, 240, 0.5);
+    }
+
+    /* Buttons */
+    .stButton button {
+        border-radius: 10px;
+        font-weight: 600;
+        padding: 0.5rem 1.5rem;
+        border: none;
+        transition: all 0.2s;
+    }
+    /* Primary form submit buttons */
+    [data-testid="stFormSubmitButton"] button {
+        background-color: #0f172a;
+        color: white;
+    }
+    [data-testid="stFormSubmitButton"] button:hover {
+        background-color: #1e293b;
+        box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+    }
+
+    /* Expander headers */
+    .streamlit-expanderHeader {
+        font-weight: 600;
+        color: #334155;
+        border-radius: 8px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -114,7 +200,6 @@ def parse_time_input(time_str):
 # --- Sidebar Navigation ---
 with st.sidebar:
     st.title("🏃 RunLog Hub")
-    st.markdown("Minimalist Tracking Edition")
     
     selected_tab = st.radio("Navigate", ["Plan", "Field (Runs)", "Gym", "Nutrition", "Stats"], label_visibility="collapsed")
     
@@ -141,22 +226,22 @@ if selected_tab == "Plan":
     c1, c2, c3 = st.columns(3)
     
     with c1:
-        st.markdown("**Macrocycle (Annual)**")
-        macro = st.text_area("Annual Goal", value=st.session_state.data['cycles']['macro'], height=100, key="txt_macro")
+        st.container(border=True).markdown("**Macrocycle (Annual)**")
+        macro = st.text_area("Annual Goal", value=st.session_state.data['cycles']['macro'], height=120, key="txt_macro", label_visibility="collapsed")
         if macro != st.session_state.data['cycles']['macro']:
             st.session_state.data['cycles']['macro'] = macro
             persist()
 
     with c2:
-        st.markdown("**Mesocycle (Block)**")
-        meso = st.text_area("Block Focus", value=st.session_state.data['cycles']['meso'], height=100, key="txt_meso")
+        st.container(border=True).markdown("**Mesocycle (Block)**")
+        meso = st.text_area("Block Focus", value=st.session_state.data['cycles']['meso'], height=120, key="txt_meso", label_visibility="collapsed")
         if meso != st.session_state.data['cycles']['meso']:
             st.session_state.data['cycles']['meso'] = meso
             persist()
 
     with c3:
-        st.markdown("**Microcycle (Week)**")
-        micro = st.text_area("Weekly Focus", value=st.session_state.data['cycles']['micro'], height=100, key="txt_micro")
+        st.container(border=True).markdown("**Microcycle (Week)**")
+        micro = st.text_area("Weekly Focus", value=st.session_state.data['cycles']['micro'], height=120, key="txt_micro", label_visibility="collapsed")
         if micro != st.session_state.data['cycles']['micro']:
             st.session_state.data['cycles']['micro'] = micro
             persist()
@@ -168,16 +253,17 @@ if selected_tab == "Plan":
     cols = st.columns(7)
     for i, day in enumerate(days):
         with cols[i]:
-            st.caption(day.upper())
-            am_val = st.text_input("AM", value=st.session_state.data['weekly_plan'][day]['am'], key=f"am_{day}", placeholder="Rest")
-            pm_val = st.text_input("PM", value=st.session_state.data['weekly_plan'][day]['pm'], key=f"pm_{day}", placeholder="Rest")
-            
-            # Save on change logic (simplified for streamlit, saves on every interaction if key changes)
-            if (am_val != st.session_state.data['weekly_plan'][day]['am'] or 
-                pm_val != st.session_state.data['weekly_plan'][day]['pm']):
-                st.session_state.data['weekly_plan'][day]['am'] = am_val
-                st.session_state.data['weekly_plan'][day]['pm'] = pm_val
-                persist()
+            with st.container(border=True):
+                st.caption(day.upper())
+                am_val = st.text_input("AM", value=st.session_state.data['weekly_plan'][day]['am'], key=f"am_{day}", placeholder="Rest", label_visibility="collapsed")
+                pm_val = st.text_input("PM", value=st.session_state.data['weekly_plan'][day]['pm'], key=f"pm_{day}", placeholder="Rest", label_visibility="collapsed")
+                
+                # Save on change logic (simplified for streamlit, saves on every interaction if key changes)
+                if (am_val != st.session_state.data['weekly_plan'][day]['am'] or 
+                    pm_val != st.session_state.data['weekly_plan'][day]['pm']):
+                    st.session_state.data['weekly_plan'][day]['am'] = am_val
+                    st.session_state.data['weekly_plan'][day]['pm'] = pm_val
+                    persist()
 
 # --- TAB: FIELD (RUNS) ---
 elif selected_tab == "Field (Runs)":
@@ -187,10 +273,9 @@ elif selected_tab == "Field (Runs)":
     runs_df = pd.DataFrame(st.session_state.data['runs'])
     
     # --- DASHBOARD SECTION (Always Visible) ---
-    st.subheader("📊 Dashboard")
     
     # Filter Logic
-    filter_type = st.radio("Activity Filter:", ["All", "Run", "Walk", "Ultimate"], horizontal=True, label_visibility="visible")
+    filter_type = st.radio("Activity Filter:", ["All", "Run", "Walk", "Ultimate"], horizontal=True, label_visibility="collapsed")
     
     # Filter Data based on selection
     if not runs_df.empty:
@@ -221,12 +306,13 @@ elif selected_tab == "Field (Runs)":
     time_label = f"{t_hours}h {t_mins}m"
 
     # Stats Cards
-    m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("Total Dist", f"{total_dist:.1f} km")
-    m2.metric("Total Time", time_label)
-    m3.metric("Avg Pace", pace_label)
-    m4.metric("Avg HR", f"{int(avg_hr)} bpm")
-    m5.metric("Count", count)
+    with st.container(border=True):
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Total Dist", f"{total_dist:.1f} km")
+        m2.metric("Total Time", time_label)
+        m3.metric("Avg Pace", pace_label)
+        m4.metric("Avg HR", f"{int(avg_hr)} bpm")
+        m5.metric("Count", count)
 
     st.divider()
 
@@ -286,7 +372,8 @@ elif selected_tab == "Field (Runs)":
             display_df = display_df[['date', 'type', 'distance', 'duration_fmt', 'avgHr', 'notes']]
             display_df.columns = ['Date', 'Type', 'Dist (km)', 'Time', 'HR', 'Notes']
             
-            st.dataframe(display_df, use_container_width=True, hide_index=True)
+            with st.container(border=True):
+                st.dataframe(display_df, use_container_width=True, hide_index=True)
             
             # Delete functionality
             with st.expander("Manage Data"):
@@ -333,9 +420,9 @@ elif selected_tab == "Gym":
         
         if selected_r_name:
             sel_routine = routine_opts[selected_r_name]
-            st.subheader(f"Logging: {sel_routine['name']}")
             
             with st.form("gym_log"):
+                st.subheader(f"Logging: {sel_routine['name']}")
                 log_date = st.date_input("Date", datetime.now())
                 
                 # Dynamic inputs for exercises
@@ -343,8 +430,8 @@ elif selected_tab == "Gym":
                 for ex in sel_routine['exercises']:
                     st.markdown(f"**{ex}**")
                     c1, c2, c3 = st.columns(3)
-                    w = c1.text_input(f"Weight ({ex})", placeholder="100, 100, 100", help="Comma separated for sets")
-                    r = c2.text_input(f"Reps ({ex})", placeholder="10, 8, 8", help="Comma separated for sets")
+                    w = c1.text_input(f"Weight ({ex})", placeholder="100, 100, 100", help="Comma separated for sets", label_visibility="collapsed")
+                    r = c2.text_input(f"Reps ({ex})", placeholder="10, 8, 8", help="Comma separated for sets", label_visibility="collapsed")
                     
                     exercises_data.append({"name": ex, "weights": w, "reps": r})
                 
@@ -384,12 +471,18 @@ elif selected_tab == "Gym":
         if sessions:
             # Stats
             total_vol_all = sum(s.get('totalVolume', 0) for s in sessions)
-            st.metric("Total Volume Lifted", f"{total_vol_all/1000:.1f}k kg")
+            
+            with st.container(border=True):
+                st.metric("Total Volume Lifted", f"{total_vol_all/1000:.1f}k kg")
+            
+            st.divider()
             
             for s in sessions:
-                with st.expander(f"{s['date']} - {s['routineName']} (Vol: {s.get('totalVolume',0)}kg)"):
+                with st.container(border=True):
+                    st.markdown(f"**{s['date']} - {s['routineName']}**")
+                    st.caption(f"Volume: {s.get('totalVolume',0)}kg")
                     for ex in s['exercises']:
-                        st.markdown(f"**{ex['name']}**: {len(ex['sets'])} sets")
+                        st.markdown(f"- {ex['name']}: {len(ex['sets'])} sets")
                     if st.button("Delete Session", key=f"del_sess_{s['id']}"):
                         st.session_state.data['gym_sessions'] = [x for x in st.session_state.data['gym_sessions'] if x['id'] != s['id']]
                         persist()
@@ -438,17 +531,20 @@ elif selected_tab == "Nutrition":
         t_fat = sum(x['fat'] for x in todays_logs)
         
         st.subheader("Today's Macros")
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Calories", t_cal)
-        col2.metric("Protein", f"{t_pro}g")
-        col3.metric("Carbs", f"{t_carb}g")
-        col4.metric("Fat", f"{t_fat}g")
+        with st.container(border=True):
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Calories", t_cal)
+            col2.metric("Protein", f"{t_pro}g")
+            col3.metric("Carbs", f"{t_carb}g")
+            col4.metric("Fat", f"{t_fat}g")
         
         # History
+        st.divider()
         st.subheader("Recent Meals")
         nut_df = pd.DataFrame(st.session_state.data['nutrition_logs'])
         if not nut_df.empty:
-            st.dataframe(nut_df[['date', 'meal', 'calories', 'protein', 'carbs', 'fat']], use_container_width=True, hide_index=True)
+            with st.container(border=True):
+                st.dataframe(nut_df[['date', 'meal', 'calories', 'protein', 'carbs', 'fat']], use_container_width=True, hide_index=True)
         else:
             st.info("No meals logged.")
 
@@ -488,25 +584,33 @@ elif selected_tab == "Stats":
         c1, c2 = st.columns(2)
         
         with c1:
-            fig_hrv = px.line(health_df, x='date', y='hrv', title="HRV Trends", markers=True)
-            fig_hrv.update_traces(line_color='#22c55e')
-            st.plotly_chart(fig_hrv, use_container_width=True)
+            with st.container(border=True):
+                fig_hrv = px.line(health_df, x='date', y='hrv', title="HRV Trends", markers=True)
+                fig_hrv.update_traces(line_color='#22c55e')
+                fig_hrv.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_family="Inter")
+                st.plotly_chart(fig_hrv, use_container_width=True)
             
         with c2:
-            fig_sleep = px.bar(health_df, x='date', y='sleepHours', title="Sleep Duration")
-            fig_sleep.update_traces(marker_color='#6366f1')
-            st.plotly_chart(fig_sleep, use_container_width=True)
+            with st.container(border=True):
+                fig_sleep = px.bar(health_df, x='date', y='sleepHours', title="Sleep Duration")
+                fig_sleep.update_traces(marker_color='#6366f1')
+                fig_sleep.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_family="Inter")
+                st.plotly_chart(fig_sleep, use_container_width=True)
             
         c3, c4 = st.columns(2)
         with c3:
-            fig_rhr = px.line(health_df, x='date', y='rhr', title="Resting Heart Rate", markers=True)
-            fig_rhr.update_traces(line_color='#ef4444')
-            st.plotly_chart(fig_rhr, use_container_width=True)
+            with st.container(border=True):
+                fig_rhr = px.line(health_df, x='date', y='rhr', title="Resting Heart Rate", markers=True)
+                fig_rhr.update_traces(line_color='#ef4444')
+                fig_rhr.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_family="Inter")
+                st.plotly_chart(fig_rhr, use_container_width=True)
             
         with c4:
-            fig_vo2 = px.line(health_df, x='date', y='vo2Max', title="VO2 Max", markers=True)
-            fig_vo2.update_traces(line_color='#3b82f6')
-            st.plotly_chart(fig_vo2, use_container_width=True)
+            with st.container(border=True):
+                fig_vo2 = px.line(health_df, x='date', y='vo2Max', title="VO2 Max", markers=True)
+                fig_vo2.update_traces(line_color='#3b82f6')
+                fig_vo2.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_family="Inter")
+                st.plotly_chart(fig_vo2, use_container_width=True)
             
     else:
         st.info("No health stats logged yet.")
