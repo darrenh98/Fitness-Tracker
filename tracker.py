@@ -1046,7 +1046,7 @@ elif selected_tab == "Share":
         # 1. Date Range
         c_dates, c_dummy = st.columns([2, 1])
         with c_dates:
-            d_range = st.date_input("Date Range", value=(datetime.now() - timedelta(days=6), datetime.now()), format="MMM DD, YYYY")
+            d_range = st.date_input("Date Range", value=(datetime.now() - timedelta(days=6), datetime.now()), format="YYYY/MM/DD")
             
         # Handle date range tuple (start, end)
         if isinstance(d_range, tuple):
