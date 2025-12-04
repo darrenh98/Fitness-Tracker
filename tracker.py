@@ -218,14 +218,26 @@ class PhysiologyEngine:
         description = "Load is very low."
 
         if ratio > 1.5:
-            status = "Overreaching"; color_class = "status-red"; description = "High injury risk! Spike in load."
+            status = "Overreaching"
+            color_class = "status-red"
+            description = "High injury risk! Spike in load."
         elif 1.3 <= ratio <= 1.5:
-            status = "High Strain"; color_class = "status-orange"; description = "Caution: Rapid load increase."
+            status = "High Strain"
+            color_class = "status-orange"
+            description = "Caution: Rapid load increase."
         elif 0.8 <= ratio < 1.3:
-            if acute_load > chronic_load_weekly: status = "Productive"; color_class = "status-green"; description = "Building fitness."
-            else: status = "Maintaining"; color_class = "status-green"; description = "Load is consistent."
+            if acute_load > chronic_load_weekly:
+                status = "Productive"
+                color_class = "status-green"
+                description = "Optimal zone. Building fitness."
+            else:
+                status = "Maintaining"
+                color_class = "status-green"
+                description = "Load is consistent."
         else:
-            status = "Recovery"; color_class = "status-gray"; description = "Workload is decreasing."
+            status = "Recovery / Detraining"
+            color_class = "status-gray"
+            description = "Workload is decreasing."
             
         # Targets (80/20 model approx)
         total_chronic = chronic_load_total
@@ -242,10 +254,16 @@ class PhysiologyEngine:
         elif buckets['low'] > targets['low']['max']: feedback = "Focus: High Volume of Easy work."
 
         return {
-            "acute": round(acute_load), "chronic": round(chronic_load_weekly),
-            "ratio": round(ratio, 2), "status": status, "css": color_class,
-            "desc": description, "buckets": buckets, "targets": targets,
-            "feedback": feedback, "total_4w": total_chronic
+            "acute": round(acute_load),
+            "chronic": round(chronic_load_weekly),
+            "ratio": round(ratio, 2),
+            "status": status,
+            "css": color_class,
+            "desc": description,
+            "buckets": buckets,
+            "targets": targets,
+            "feedback": feedback,
+            "total_4w": total_chronic
         }
 
 # --- UI Render Functions ---
@@ -812,7 +830,7 @@ def render_share():
         st.subheader("Generate Coach Summary")
         c_dates, c_dummy = st.columns([2, 1])
         with c_dates:
-            d_range = st.date_input("Date Range", value=(datetime.now() - timedelta(days=6), datetime.now()), format="YYYY/MM/DD")
+            d_range = st.date_input("Date Range", value=(get_malaysia_time() - timedelta(days=6), get_malaysia_time()), format="YYYY/MM/DD")
         if isinstance(d_range, tuple):
             if len(d_range) == 2: start_r, end_r = d_range
             elif len(d_range) == 1: start_r, end_r = d_range[0], d_range[0]
@@ -869,7 +887,7 @@ def main():
         st.subheader("Weekly Schedule")
         days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
         cols = st.columns(7)
-        today_name = datetime.now().strftime("%A")
+        today_name = get_malaysia_time().strftime("%A")
         for i, day in enumerate(days):
             with cols[i]:
                 border_color = "#f97316" if day == today_name else "#e2e8f0" # Highlight today
