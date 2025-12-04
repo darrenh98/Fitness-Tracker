@@ -726,21 +726,38 @@ elif selected_tab == "Field (Runs)":
                                 persist()
                                 st.rerun()
                         
-                        with st.expander("See Details", expanded=False):
-                             dc1, dc2 = st.columns(2)
-                             with dc1:
-                                 st.markdown(f"**Notes:** {row.get('notes', '-')}")
-                                 if row.get('cadence', 0) > 0 or row.get('power', 0) > 0:
-                                     st.caption(f"**Cadence:** {row.get('cadence','-')} spm | **Power:** {row.get('power','-')} w")
-                             with dc2:
-                                 zones = []
-                                 for z in range(1, 6):
-                                     val = row.get(f'z{z}', 0)
-                                     if val > 0: zones.append(f"**Z{z}:** {format_duration(val)}")
-                                 if zones:
-                                     st.markdown(" | ".join(zones))
-                                 else:
-                                     st.caption("No zone data")
+                        # Render Zones (Stacked Bar)
+                        z_vals = [row.get(f'z{i}', 0) for i in range(1, 6)]
+                        total_z_time = sum(z_vals)
+                        if total_z_time > 0:
+                            # Calculate % widths
+                            pcts = [(v/total_z_time)*100 for v in z_vals]
+                            # Formatted durations for display inside/tooltip
+                            t_strs = [format_duration(v) if v > 0 else "" for v in z_vals]
+                            
+                            bar_html = f"""
+                            <div style="display: flex; width: 100%; height: 20px; border-radius: 6px; overflow: hidden; margin-top: 8px; background-color: #f1f5f9;">
+                                <div style="width: {pcts[0]}%; background-color: #1e40af;" title="Zone 1: {t_strs[0]}"></div>
+                                <div style="width: {pcts[1]}%; background-color: #60a5fa;" title="Zone 2: {t_strs[1]}"></div>
+                                <div style="width: {pcts[2]}%; background-color: #facc15;" title="Zone 3: {t_strs[2]}"></div>
+                                <div style="width: {pcts[3]}%; background-color: #fb923c;" title="Zone 4: {t_strs[3]}"></div>
+                                <div style="width: {pcts[4]}%; background-color: #f87171;" title="Zone 5: {t_strs[4]}"></div>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; font-size: 0.65rem; color: #64748b; margin-top: 2px;">
+                                <span>{t_strs[0]}</span><span>{t_strs[1]}</span><span>{t_strs[2]}</span><span>{t_strs[3]}</span><span>{t_strs[4]}</span>
+                            </div>
+                            """
+                            st.markdown(bar_html, unsafe_allow_html=True)
+
+                        # Render Additional Details below stats
+                        extras = []
+                        if row.get('cadence', 0) > 0: extras.append(f"**Cad:** {row['cadence']}")
+                        if row.get('power', 0) > 0: extras.append(f"**Pwr:** {row['power']}w")
+                        if row.get('notes'): extras.append(f"📝 {row['notes']}")
+                        
+                        if extras:
+                            st.markdown(f"<div style='margin-top:5px; font-size:0.85rem; color:#475569;'>{' &nbsp; | &nbsp; '.join(extras)}</div>", unsafe_allow_html=True)
+
             else:
                 st.info("No activities found for this category.")
 
@@ -748,25 +765,45 @@ elif selected_tab == "Field (Runs)":
 elif selected_tab == "Gym":
     st.header(":material/fitness_center: Gym & Weights")
     
+    # Initialize active workout session state
     if 'active_workout' not in st.session_state:
         st.session_state.active_workout = None
+    
+    # Save Dialog State
     if 'gym_save_dialog' not in st.session_state:
         st.session_state.gym_save_dialog = False
 
+    # --- Mode 1: Selection Screen ---
     if st.session_state.active_workout is None and not st.session_state.gym_save_dialog:
         col_rout, col_hist = st.tabs(["Start Workout", "History"])
+        
         with col_rout:
             st.subheader("Start from Routine")
             routine_opts = {r['name']: r for r in st.session_state.data['routines']}
+            
             if routine_opts:
                 sel_r_name = st.selectbox("Select Routine", list(routine_opts.keys()))
                 if st.button(":material/play_arrow: Start Workout", use_container_width=True):
+                    # Deep copy routine to active state
                     selected = routine_opts[sel_r_name]
-                    exercises_prep = [{"name": ex_name, "sets": [{"reps": "", "weight": ""} for _ in range(3)]} for ex_name in selected['exercises']]
-                    st.session_state.active_workout = {"routine_id": selected['id'], "routine_name": selected['name'], "date": datetime.now().date(), "exercises": exercises_prep}
+                    # Transform structure for active logging: Add sets array
+                    exercises_prep = []
+                    for ex_name in selected['exercises']:
+                        exercises_prep.append({
+                            "name": ex_name,
+                            "sets": [{"reps": "", "weight": ""} for _ in range(3)] # Default 3 empty sets
+                        })
+                    
+                    st.session_state.active_workout = {
+                        "routine_id": selected['id'],
+                        "routine_name": selected['name'],
+                        "date": datetime.now().date(),
+                        "exercises": exercises_prep
+                    }
                     st.rerun()
             else:
                 st.info("No routines found. Create one below.")
+
             st.divider()
             with st.expander("Manage Routines"):
                 with st.form("new_routine"):
@@ -779,6 +816,7 @@ elif selected_tab == "Gym":
                         persist()
                         st.success("Routine Created!")
                         st.rerun()
+                
                 for r in st.session_state.data['routines']:
                     c1, c2 = st.columns([5, 1])
                     c1.markdown(f"**{r['name']}**")
@@ -787,6 +825,7 @@ elif selected_tab == "Gym":
                         st.session_state.data['routines'] = [x for x in st.session_state.data['routines'] if x['id'] != r['id']]
                         persist()
                         st.rerun()
+
         with col_hist:
             sessions = st.session_state.data['gym_sessions']
             if sessions:
@@ -808,88 +847,154 @@ elif selected_tab == "Gym":
             else:
                 st.info("No gym sessions logged.")
 
+    # --- Mode 2: Active Logging Screen ---
     elif st.session_state.active_workout is not None and not st.session_state.gym_save_dialog:
         aw = st.session_state.active_workout
+        
+        # Header
         c_head, c_canc = st.columns([3, 1])
         c_head.subheader(f":material/fitness_center: {aw['routine_name']}")
         if c_canc.button("Cancel"):
             st.session_state.active_workout = None
             st.rerun()
+            
         aw['date'] = st.date_input("Date", aw['date'])
+        
         st.divider()
+        
+        # Exercises Loop
+        # We iterate by index to modify in place
         exercises_to_remove = []
+        
         for i, ex in enumerate(aw['exercises']):
             with st.container(border=True):
+                # Header Row: Name | History | Remove
                 ch1, ch2, ch3 = st.columns([3, 3, 1])
                 new_name = ch1.text_input(f"Exercise {i+1}", value=ex['name'], key=f"ex_name_{i}")
                 ex['name'] = new_name
+                
+                # History Lookup
                 last_stats = get_last_lift_stats(new_name)
-                if last_stats: ch2.info(f"Last: {last_stats}")
-                else: ch2.caption("No history found")
-                if ch3.button(":material/delete:", key=f"del_ex_{i}"): exercises_to_remove.append(i)
-                st.markdown("""<div style="display:grid; grid-template-columns: 1fr 1fr 0.5fr; gap:10px; font-size:0.8rem; font-weight:600; color:#64748b; margin-bottom:5px;"><div>REPS</div><div>WEIGHT (kg)</div><div></div></div>""", unsafe_allow_html=True)
+                if last_stats:
+                    ch2.info(f"Last: {last_stats}")
+                else:
+                    ch2.caption("No history found")
+                    
+                if ch3.button(":material/delete:", key=f"del_ex_{i}"):
+                    exercises_to_remove.append(i)
+                
+                # Sets Header
+                st.markdown(f"""
+                <div style="display:grid; grid-template-columns: 1fr 1fr 0.5fr; gap:10px; font-size:0.8rem; font-weight:600; color:#64748b; margin-bottom:5px;">
+                    <div>REPS</div><div>WEIGHT (kg)</div><div></div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Sets Loop
                 sets_to_remove = []
                 for j, s in enumerate(ex['sets']):
                     c_reps, c_w, c_del = st.columns([1, 1, 0.5])
                     s['reps'] = c_reps.text_input("Reps", value=s['reps'], key=f"r_{i}_{j}", label_visibility="collapsed", placeholder="10")
                     s['weight'] = c_w.text_input("Weight", value=s['weight'], key=f"w_{i}_{j}", label_visibility="collapsed", placeholder="50")
-                    if c_del.button(":material/close:", key=f"del_set_{i}_{j}"): sets_to_remove.append(j)
+                    if c_del.button(":material/close:", key=f"del_set_{i}_{j}"):
+                        sets_to_remove.append(j)
+                
+                # Process Set Deletions
                 if sets_to_remove:
-                    for index in sorted(sets_to_remove, reverse=True): del ex['sets'][index]
+                    for index in sorted(sets_to_remove, reverse=True):
+                        del ex['sets'][index]
                     st.rerun()
+                
+                # Add Set Button
                 if st.button(f":material/add: Add Set", key=f"add_set_{i}"):
                     ex['sets'].append({"reps": "", "weight": ""})
                     st.rerun()
+
+        # Process Exercise Deletions
         if exercises_to_remove:
-            for index in sorted(exercises_to_remove, reverse=True): del aw['exercises'][index]
+            for index in sorted(exercises_to_remove, reverse=True):
+                del aw['exercises'][index]
             st.rerun()
+
+        # Add New Exercise Button
         if st.button(":material/add_circle: Add New Exercise"):
             aw['exercises'].append({"name": "New Exercise", "sets": [{"reps": "", "weight": ""} for _ in range(3)]})
             st.rerun()
+            
         st.divider()
         if st.button(":material/check_circle: Finish Workout", type="primary", use_container_width=True):
             st.session_state.gym_save_dialog = True
             st.rerun()
 
+    # --- Mode 3: Save Dialog ---
     elif st.session_state.gym_save_dialog:
         st.subheader("🎉 Workout Complete!")
         st.info("You modified the routine structure. Would you like to update the original routine?")
+        
         aw = st.session_state.active_workout
+        
         c1, c2 = st.columns(2)
+        
+        # Calculate Volume & Clean Data
         final_exercises = []
         total_vol = 0
         current_ex_names = []
+        
         for ex in aw['exercises']:
             clean_sets = []
             for s in ex['sets']:
+                # Basic validation: check if valid numbers
                 try:
                     r_val = float(s['reps'])
                     w_val = float(s['weight'])
-                    clean_sets.append({"reps": s['reps'], "weight": s['weight']})
+                    clean_sets.append({"reps": s['reps'], "weight": s['weight']}) # Store as string for flexibility, calc with float
                     total_vol += r_val * w_val
-                except: continue
-            if clean_sets:
-                final_exercises.append({"name": ex['name'], "sets": clean_sets})
+                except:
+                    continue # Skip empty/invalid sets
+            
+            if clean_sets: # Only save exercises with valid sets
+                final_exercises.append({
+                    "name": ex['name'],
+                    "sets": clean_sets
+                })
                 current_ex_names.append(ex['name'])
-        new_session = {"id": int(time.time()), "date": str(aw['date']), "routineName": aw['routine_name'], "exercises": final_exercises, "totalVolume": total_vol}
+
+        new_session = {
+            "id": int(time.time()),
+            "date": str(aw['date']),
+            "routineName": aw['routine_name'],
+            "exercises": final_exercises,
+            "totalVolume": total_vol
+        }
+
+        # Option 1: Update Routine
         if c1.button(":material/update: Save & Update Routine"):
+            # Update Routine Definition
             for r in st.session_state.data['routines']:
                 if r['id'] == aw['routine_id']:
                     r['exercises'] = current_ex_names
                     break
+            
+            # Save Session
             st.session_state.data['gym_sessions'].insert(0, new_session)
             persist()
+            
+            # Reset State
             st.session_state.active_workout = None
             st.session_state.gym_save_dialog = False
             st.success("Routine updated and workout logged!")
             st.rerun()
+
+        # Option 2: Just Save
         if c2.button(":material/save: Just Save Session"):
             st.session_state.data['gym_sessions'].insert(0, new_session)
             persist()
+            
             st.session_state.active_workout = None
             st.session_state.gym_save_dialog = False
             st.success("Workout logged!")
             st.rerun()
+            
         if st.button("Go Back"):
             st.session_state.gym_save_dialog = False
             st.rerun()
