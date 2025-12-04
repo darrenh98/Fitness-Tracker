@@ -451,11 +451,11 @@ elif selected_tab == "Field (Runs)":
             def_dist = run_data['distance']
             def_dur = run_data['duration']
             def_hr = run_data['avgHr']
-            def_cad = run_data.get('cadence', 0)
-            def_pwr = run_data.get('power', 0)
             def_notes = run_data.get('notes', '')
             def_feel = run_data.get('feel', 'Normal')
             def_rpe = run_data.get('rpe', 5)
+            def_cad = run_data.get('cadence', 0)
+            def_pwr = run_data.get('power', 0)
             def_z1 = format_duration(run_data.get('z1', 0))
             def_z2 = format_duration(run_data.get('z2', 0))
             def_z3 = format_duration(run_data.get('z3', 0))
@@ -701,6 +701,7 @@ elif selected_tab == "Field (Runs)":
                         </div>
                         """
                         c_stats.markdown(stats_html, unsafe_allow_html=True)
+                        
                         feel_val = row.get('feel', '')
                         feel_emoji = {
                             "Good": '<span class="material-symbols-rounded">sentiment_satisfied</span>',
@@ -709,14 +710,17 @@ elif selected_tab == "Field (Runs)":
                             "Pain": '<span class="material-symbols-rounded">sick</span>'
                         }.get(feel_val, "")
                         
-                        hr_html = f"""
-                        <div style="line-height: 1.4;">
-                            <span class="history-sub">HR:</span> <span class="history-value">{row['avgHr'] if row['avgHr']>0 else '-'}</span><br>
-                            <span class="history-sub">RPE:</span> <span class="history-value">{row.get('rpe', '-')}</span><br>
-                            <span style="font-size:1.2rem;">{feel_emoji}</span>
-                        </div>
-                        """
-                        c_extra.markdown(hr_html, unsafe_allow_html=True)
+                        # NEW METRICS HTML BLOCK (No Expander)
+                        metrics_list = []
+                        if row['avgHr'] > 0: metrics_list.append(f"<span class='history-sub'>HR:</span> <span class='history-value'>{row['avgHr']}</span>")
+                        metrics_list.append(f"<span class='history-sub'>RPE:</span> <span class='history-value'>{row.get('rpe', '-')}</span>")
+                        if row.get('cadence', 0) > 0: metrics_list.append(f"<span class='history-sub'>Cad:</span> <span class='history-value'>{row['cadence']}</span>")
+                        if row.get('power', 0) > 0: metrics_list.append(f"<span class='history-sub'>Pwr:</span> <span class='history-value'>{row['power']}</span>")
+                        
+                        metrics_html = "<div style='line-height: 1.4;'>" + "<br>".join(metrics_list) + "</div>"
+                        metrics_html += f"<div style='margin-top:4px;'>{feel_emoji}</div>"
+                        c_extra.markdown(metrics_html, unsafe_allow_html=True)
+
                         with c_act:
                             if st.button(":material/edit:", key=f"ed_{row['id']}_{idx}_{filter_cat}"):
                                 st.session_state.edit_run_id = row['id']
@@ -726,37 +730,30 @@ elif selected_tab == "Field (Runs)":
                                 persist()
                                 st.rerun()
                         
-                        # Render Zones (Stacked Bar)
+                        # Render Zones (Stacked Bar - Improved)
                         z_vals = [row.get(f'z{i}', 0) for i in range(1, 6)]
                         total_z_time = sum(z_vals)
                         if total_z_time > 0:
-                            # Calculate % widths
                             pcts = [(v/total_z_time)*100 for v in z_vals]
-                            # Formatted durations for display inside/tooltip
                             t_strs = [format_duration(v) if v > 0 else "" for v in z_vals]
                             
+                            # Helper to decide if text fits
+                            def get_lbl(pct, txt): return txt if pct > 10 else ""
+                            
                             bar_html = f"""
-                            <div style="display: flex; width: 100%; height: 20px; border-radius: 6px; overflow: hidden; margin-top: 8px; background-color: #f1f5f9;">
-                                <div style="width: {pcts[0]}%; background-color: #1e40af;" title="Zone 1: {t_strs[0]}"></div>
-                                <div style="width: {pcts[1]}%; background-color: #60a5fa;" title="Zone 2: {t_strs[1]}"></div>
-                                <div style="width: {pcts[2]}%; background-color: #facc15;" title="Zone 3: {t_strs[2]}"></div>
-                                <div style="width: {pcts[3]}%; background-color: #fb923c;" title="Zone 4: {t_strs[3]}"></div>
-                                <div style="width: {pcts[4]}%; background-color: #f87171;" title="Zone 5: {t_strs[4]}"></div>
-                            </div>
-                            <div style="display: flex; justify-content: space-between; font-size: 0.65rem; color: #64748b; margin-top: 2px;">
-                                <span>{t_strs[0]}</span><span>{t_strs[1]}</span><span>{t_strs[2]}</span><span>{t_strs[3]}</span><span>{t_strs[4]}</span>
+                            <div style="display: flex; width: 100%; height: 18px; border-radius: 4px; overflow: hidden; margin-top: 8px; background-color: #f1f5f9;">
+                                <div style="width: {pcts[0]}%; background-color: #1e40af; color: white; font-size: 10px; display: flex; align-items: center; justify-content: center; overflow: hidden;">{get_lbl(pcts[0], t_strs[0])}</div>
+                                <div style="width: {pcts[1]}%; background-color: #60a5fa; color: white; font-size: 10px; display: flex; align-items: center; justify-content: center; overflow: hidden;">{get_lbl(pcts[1], t_strs[1])}</div>
+                                <div style="width: {pcts[2]}%; background-color: #facc15; color: black; font-size: 10px; display: flex; align-items: center; justify-content: center; overflow: hidden;">{get_lbl(pcts[2], t_strs[2])}</div>
+                                <div style="width: {pcts[3]}%; background-color: #fb923c; color: white; font-size: 10px; display: flex; align-items: center; justify-content: center; overflow: hidden;">{get_lbl(pcts[3], t_strs[3])}</div>
+                                <div style="width: {pcts[4]}%; background-color: #f87171; color: white; font-size: 10px; display: flex; align-items: center; justify-content: center; overflow: hidden;">{get_lbl(pcts[4], t_strs[4])}</div>
                             </div>
                             """
                             st.markdown(bar_html, unsafe_allow_html=True)
 
-                        # Render Additional Details below stats
-                        extras = []
-                        if row.get('cadence', 0) > 0: extras.append(f"**Cad:** {row['cadence']}")
-                        if row.get('power', 0) > 0: extras.append(f"**Pwr:** {row['power']}w")
-                        if row.get('notes'): extras.append(f"📝 {row['notes']}")
-                        
-                        if extras:
-                            st.markdown(f"<div style='margin-top:5px; font-size:0.85rem; color:#475569;'>{' &nbsp; | &nbsp; '.join(extras)}</div>", unsafe_allow_html=True)
+                        # Notes (if any)
+                        if row.get('notes'):
+                             st.markdown(f"<div style='margin-top:5px; font-size:0.85rem; color:#475569;'>📝 {row['notes']}</div>", unsafe_allow_html=True)
 
             else:
                 st.info("No activities found for this category.")
