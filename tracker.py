@@ -4,7 +4,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import time
 import copy
 import re
@@ -569,13 +569,96 @@ elif selected_tab == "Field (Runs)":
                 st.rerun()
 
     st.markdown("### Dashboard & History")
+    
+    # --- NEW DATE CONTROLS ---
+    if 'dash_period' not in st.session_state: st.session_state.dash_period = "Weekly"
+    if 'dash_offset' not in st.session_state: st.session_state.dash_offset = 0
+
+    def get_date_range(period, offset):
+        today = datetime.now().date()
+        
+        if period == "Weekly":
+            # Start of week = Monday
+            start_of_week = today - timedelta(days=today.weekday())
+            start_date = start_of_week - timedelta(weeks=offset)
+            end_date = start_date + timedelta(days=6)
+            label = f"{start_date.strftime('%b %d')} - {end_date.strftime('%b %d, %Y')}"
+            
+        elif period == "Monthly":
+            # Calculate month based on offset
+            total_months = today.year * 12 + today.month - 1 - offset
+            year = total_months // 12
+            month = total_months % 12 + 1
+            start_date = date(year, month, 1)
+            
+            # Last day is day before next month start
+            if month == 12:
+                end_date = date(year + 1, 1, 1) - timedelta(days=1)
+            else:
+                end_date = date(year, month + 1, 1) - timedelta(days=1)
+            label = start_date.strftime("%B %Y")
+
+        elif period == "6 Months":
+            current_half = 0 if today.month <= 6 else 1
+            total_halves = today.year * 2 + current_half - offset
+            year = total_halves // 2
+            half = total_halves % 2
+            if half == 0:
+                start_date = date(year, 1, 1)
+                end_date = date(year, 6, 30)
+                label = f"H1 {year} (Jan - Jun)"
+            else:
+                start_date = date(year, 7, 1)
+                end_date = date(year, 12, 31)
+                label = f"H2 {year} (Jul - Dec)"
+                
+        else: # Yearly
+            target_year = today.year - offset
+            start_date = date(target_year, 1, 1)
+            end_date = date(target_year, 12, 31)
+            label = str(target_year)
+            
+        return start_date, end_date, label
+
+    # UI for Controls
+    with st.container(border=True):
+        c_p, c_nav = st.columns([1.5, 2.5])
+        with c_p:
+            new_p = st.selectbox("View Period", ["Weekly", "Monthly", "6 Months", "Yearly"], 
+                                 index=["Weekly", "Monthly", "6 Months", "Yearly"].index(st.session_state.dash_period), 
+                                 label_visibility="collapsed")
+            if new_p != st.session_state.dash_period:
+                st.session_state.dash_period = new_p
+                st.session_state.dash_offset = 0
+                st.rerun()
+        
+        start_d, end_d, d_label = get_date_range(st.session_state.dash_period, st.session_state.dash_offset)
+        
+        with c_nav:
+            c_prev, c_lbl, c_next = st.columns([1, 2, 1])
+            if c_prev.button("◀", use_container_width=True):
+                st.session_state.dash_offset += 1
+                st.rerun()
+            c_lbl.markdown(f"<div style='text-align: center; padding-top: 5px; font-weight: 600; color: #334155;'>{d_label}</div>", unsafe_allow_html=True)
+            if c_next.button("▶", use_container_width=True, disabled=(st.session_state.dash_offset <= 0)):
+                st.session_state.dash_offset -= 1
+                st.rerun()
+
+    # Filter Dataframe based on Period
+    period_runs_df = pd.DataFrame(columns=runs_df.columns)
+    if not runs_df.empty:
+        # Ensure we have datetime objects
+        runs_df['dt_obj'] = pd.to_datetime(runs_df['date']).dt.date
+        # Filter
+        period_runs_df = runs_df[ (runs_df['dt_obj'] >= start_d) & (runs_df['dt_obj'] <= end_d) ]
+
     tabs = st.tabs(["All Activities", "Run", "Walk", "Ultimate"])
     categories = ["All", "Run", "Walk", "Ultimate"]
     for i, tab in enumerate(tabs):
         with tab:
             filter_cat = categories[i]
-            if not runs_df.empty:
-                filtered_df = runs_df[runs_df['type'] == filter_cat] if filter_cat != "All" else runs_df
+            if not period_runs_df.empty:
+                filtered_df = period_runs_df[period_runs_df['type'] == filter_cat] if filter_cat != "All" else period_runs_df
             else:
                 filtered_df = pd.DataFrame(columns=['distance', 'duration', 'avgHr'])
             
@@ -878,6 +961,7 @@ elif selected_tab == "Stats":
         list_h_df = health_df.sort_values(by='date', ascending=False)
         for index, row in list_h_df.iterrows():
              with st.container():
+                 # Mobile Optimized 3-col layout
                  hc1, hc2, hc3 = st.columns([2, 4, 1.5])
                  hc1.markdown(f"**{row['date'].date()}**")
                  stats_str = f"""
