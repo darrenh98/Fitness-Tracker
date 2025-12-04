@@ -7,20 +7,26 @@ import os
 from datetime import datetime, timedelta
 import time
 import copy
+import re
+
+# Try to import docx, handle if not installed immediately
+try:
+    from docx import Document
+except ImportError:
+    Document = None
 
 # --- Configuration & Styling ---
 st.set_page_config(
     page_title="RunLog Hub",
-    page_icon=":material/sprint:", # Browser tab icon
+    page_icon=":material/sprint:",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for Modern Minimalist Look & Quick-Tap UI
+# Custom CSS
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-    /* Import Material Symbols for use in HTML */
     @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200');
 
     html, body, [class*="css"] {
@@ -163,7 +169,6 @@ st.markdown("""
         [data-testid="stMetricLabel"] {
             font-size: 0.7rem;
         }
-        /* Adjust list container padding for mobile */
         [data-testid="stVerticalBlock"] > [style*="flex-direction: column;"] > [data-testid="stVerticalBlock"] > [data-testid="stContainer"] {
             padding: 0.75rem;
         }
@@ -210,36 +215,13 @@ if 'data' not in st.session_state:
 def persist():
     save_data(st.session_state.data)
 
-# --- Smart Defaults Helper ---
-def get_last_run_defaults(activity_type):
-    runs = st.session_state.data.get('runs', [])
-    # Default: Dist, Dur, HR, Cadence, Power
-    if not runs:
-        return 5.0, 30.0, 140, 170, 200
-    type_runs = [r for r in runs if r.get('type') == activity_type]
-    if not type_runs:
-        return 5.0, 30.0, 140, 170, 200
-    last = type_runs[0]
-    dist = float(last.get('distance', 5.0))
-    dur = float(last.get('duration', 30.0))
-    hr = int(last.get('avgHr', 140))
-    cad = int(last.get('cadence', 170))
-    pwr = int(last.get('power', 200))
-    return dist, dur, hr, cad, pwr
-
 def get_last_lift_stats(ex_name):
-    """Finds the last set data for a specific exercise"""
     sessions = st.session_state.data.get('gym_sessions', [])
     if not sessions:
         return None
-        
-    # Sessions are already sorted newest first usually, but let's be sure
-    # Assuming index 0 is newest
     for s in sessions:
         for ex in s['exercises']:
             if ex['name'].lower() == ex_name.lower():
-                # Found it
-                # Format: "Last: 100kg x 5, 100kg x 5"
                 sets_str = ", ".join([f"{s['reps']}x{s['weight']}kg" for s in ex['sets']])
                 return sets_str
     return None
@@ -284,13 +266,11 @@ def generate_report(start_date, end_date, selected_cats):
     
     if field_types:
         runs = st.session_state.data['runs']
-        # Filter by date and type
         period_runs = [
             r for r in runs 
             if start_date <= datetime.strptime(r['date'], '%Y-%m-%d').date() <= end_date
             and r['type'] in field_types
         ]
-        # Sort by date
         period_runs.sort(key=lambda x: x['date'])
         
         if period_runs:
@@ -300,39 +280,28 @@ def generate_report(start_date, end_date, selected_cats):
             report.append(f"Total: {total_dist:.1f} km | {format_duration(total_time)}")
             
             for r in period_runs:
-                # Basic line
                 line = f"- {r['date'][5:]}: {r['type']} {r['distance']}km @ {format_duration(r['duration'])}"
-                
-                # Pace calculation
                 if r['type'] != 'Ultimate' and r['distance'] > 0:
                     pace = r['duration'] / r['distance']
                     line += f" ({format_pace(pace)}/km)"
-                
-                # HR & Feel
                 hr = f"{r['avgHr']}bpm" if r['avgHr'] > 0 else ""
                 feel = r.get('feel', '')
                 if hr or feel:
                     line += f" | {hr} {feel}"
-                
                 report.append(line)
                 
-                # Detailed Notes/Zones/Metrics line
                 details = []
                 if r.get('cadence', 0) > 0: details.append(f"Cad: {r['cadence']}")
                 if r.get('power', 0) > 0: details.append(f"Pwr: {r['power']}w")
                 if r.get('notes'): details.append(f"📝 {r['notes']}")
                 
-                # Add zones if they exist and are non-zero
                 zones = []
                 for i in range(1, 6):
                     z_val = r.get(f'z{i}', 0)
-                    if z_val > 0:
-                        zones.append(f"Z{i}:{format_duration(z_val)}")
-                if zones:
-                    details.append(f"Zones: {', '.join(zones)}")
+                    if z_val > 0: zones.append(f"Z{i}:{format_duration(z_val)}")
+                if zones: details.append(f"Zones: {', '.join(zones)}")
                 
-                if details:
-                    report.append(f"   {' | '.join(details)}")
+                if details: report.append(f"   {' | '.join(details)}")
             report.append("")
     
     # 2. GYM
@@ -340,37 +309,64 @@ def generate_report(start_date, end_date, selected_cats):
         gyms = st.session_state.data['gym_sessions']
         period_gyms = [g for g in gyms if start_date <= datetime.strptime(g['date'], '%Y-%m-%d').date() <= end_date]
         period_gyms.sort(key=lambda x: x['date'])
-        
         if period_gyms:
             report.append(f"💪 **GYM ({len(period_gyms)})**")
             for g in period_gyms:
                 vol = g.get('totalVolume', 0)
                 report.append(f"- {g['date'][5:]}: {g['routineName']} (Vol: {vol:.0f}kg)")
-                # List exercises briefly
                 ex_names = [e['name'] for e in g['exercises']]
-                if ex_names:
-                    report.append(f"   Exs: {', '.join(ex_names)}")
+                if ex_names: report.append(f"   Exs: {', '.join(ex_names)}")
             report.append("")
 
     # 3. STATS
     if "Stats" in selected_cats:
         stats = st.session_state.data['health_logs']
         period_stats = [s for s in stats if start_date <= datetime.strptime(s['date'], '%Y-%m-%d').date() <= end_date]
-        
         if period_stats:
             avg_rhr = sum(s['rhr'] for s in period_stats) / len(period_stats)
             avg_hrv = sum(s['hrv'] for s in period_stats) / len(period_stats)
             avg_sleep = sum(s['sleepHours'] for s in period_stats) / len(period_stats)
-            
             report.append(f"❤️ **RECOVERY (Avg)**")
             report.append(f"Sleep: {avg_sleep:.1f}h | HRV: {int(avg_hrv)} | RHR: {int(avg_rhr)}")
 
     return "\n".join(report)
 
+def parse_imported_word_data(docx_file):
+    if Document is None:
+        return 0, "python-docx not installed"
+    try:
+        doc = Document(docx_file)
+        count = 0
+        current_year = datetime.now().year
+        pattern = r"- (\d{2}-\d{2}): (Run|Walk|Ultimate) (\d+\.?\d*)km @ (\d{2}:\d{2}:\d{2})"
+        new_runs = []
+        for para in doc.paragraphs:
+            text = para.text.strip()
+            match = re.search(pattern, text)
+            if match:
+                date_str, type_str, dist_str, dur_str = match.groups()
+                full_date_str = f"{current_year}-{date_str}"
+                dur_decimal = parse_time_input(dur_str)
+                new_run = {
+                    "id": int(time.time() * 1000) + count,
+                    "date": full_date_str, "type": type_str, "distance": float(dist_str),
+                    "duration": dur_decimal, "avgHr": 0, "rpe": 5, "feel": "Normal", "notes": "Imported",
+                    "z1": 0, "z2": 0, "z3": 0, "z4": 0, "z5": 0, "cadence": 0, "power": 0
+                }
+                new_runs.append(new_run)
+                count += 1
+        if new_runs:
+            st.session_state.data['runs'].extend(new_runs)
+            st.session_state.data['runs'].sort(key=lambda x: x['date'], reverse=True)
+            persist()
+        return count, ""
+    except Exception as e:
+        return 0, str(e)
+
 # --- Sidebar Navigation ---
 with st.sidebar:
     st.title(":material/sprint: RunLog Hub")
-    selected_tab = st.radio("Navigate", ["Plan", "Field (Runs)", "Gym", "Stats", "Trends", "Share"], label_visibility="collapsed")
+    selected_tab = st.radio("Navigate", ["Plan", "Field (Runs)", "Gym", "Stats", "Trends", "Share", "Import"], label_visibility="collapsed")
     st.divider()
     
     with st.expander("👤 Athlete Profile"):
@@ -426,7 +422,7 @@ elif selected_tab == "Field (Runs)":
     st.header(":material/directions_run: Field Activities")
     runs_df = pd.DataFrame(st.session_state.data['runs'])
     
-    # Check for success message after reload
+    # Toast Logic
     if 'run_log_success' in st.session_state and st.session_state.run_log_success:
         st.toast("✅ Activity Logged Successfully!")
         st.session_state.run_log_success = False
@@ -434,24 +430,19 @@ elif selected_tab == "Field (Runs)":
     edit_run_id = st.session_state.get('edit_run_id', None)
     if 'form_act_type' not in st.session_state: st.session_state.form_act_type = "Run"
     
-    # CLEAN SLATE DEFAULTS (No smart defaults, everything resets to 0/empty)
+    # NO SMART DEFAULTS (Reset to 0)
     def_type = st.session_state.form_act_type
     def_date = datetime.now()
     def_dist = 0.0
-    def_dur = 0.0 # Will render as empty string or "00:00:00"
+    def_dur = 0.0
     def_hr = 0
+    def_cad = 0
+    def_pwr = 0
     def_notes = ""
     def_feel = "Normal"
     def_rpe = 5
-    def_cad = 0
-    def_pwr = 0
-    def_z1 = ""
-    def_z2 = ""
-    def_z3 = ""
-    def_z4 = ""
-    def_z5 = ""
+    def_z1, def_z2, def_z3, def_z4, def_z5 = "", "", "", "", ""
     
-    # Overwrite if Editing
     if edit_run_id:
         run_data = next((r for r in st.session_state.data['runs'] if r['id'] == edit_run_id), None)
         if run_data:
@@ -460,11 +451,11 @@ elif selected_tab == "Field (Runs)":
             def_dist = run_data['distance']
             def_dur = run_data['duration']
             def_hr = run_data['avgHr']
+            def_cad = run_data.get('cadence', 0)
+            def_pwr = run_data.get('power', 0)
             def_notes = run_data.get('notes', '')
             def_feel = run_data.get('feel', 'Normal')
             def_rpe = run_data.get('rpe', 5)
-            def_cad = run_data.get('cadence', 0)
-            def_pwr = run_data.get('power', 0)
             def_z1 = format_duration(run_data.get('z1', 0))
             def_z2 = format_duration(run_data.get('z2', 0))
             def_z3 = format_duration(run_data.get('z3', 0))
@@ -472,7 +463,7 @@ elif selected_tab == "Field (Runs)":
             def_z5 = format_duration(run_data.get('z5', 0))
 
     form_label = f":material/edit: Edit Activity" if edit_run_id else ":material/add_circle: Log Activity"
-    # Auto-collapse when not editing
+    # Auto collapse if not editing
     expander_state = True if edit_run_id else False
 
     with st.expander(form_label, expanded=expander_state):
@@ -490,7 +481,7 @@ elif selected_tab == "Field (Runs)":
                     def_notes = t_data.get('notes', "")
                     st.session_state.form_act_type = def_type
 
-        # Add clear_on_submit=True to reset inputs after saving
+        # Clear on submit resets the form to empty/0 values automatically
         with st.form("run_form", clear_on_submit=True):
             st.caption("Activity Type")
             act_type = st.radio("Type", ["Run", "Walk", "Ultimate"], index=["Run", "Walk", "Ultimate"].index(def_type) if def_type in ["Run", "Walk", "Ultimate"] else 0, key="act_type_radio", horizontal=True, label_visibility="collapsed")
@@ -500,11 +491,10 @@ elif selected_tab == "Field (Runs)":
                 dist = st.number_input("Distance", min_value=0.0, step=0.01, value=float(def_dist), label_visibility="collapsed")
             with c2:
                 st.caption("Duration (hh:mm:ss)")
-                # If editing, show the time. If new, show placeholder/empty for faster typing
+                # If new log, show empty string so placeholder shows "00:30:00"
                 dur_val = format_duration(def_dur) if edit_run_id or def_dur > 0 else ""
                 dur_str = st.text_input("Duration", value=dur_val, placeholder="00:30:00", label_visibility="collapsed")
             
-            # Row 3: HR, RPE, Cadence, Power
             c3, c4, c5, c6 = st.columns(4)
             with c3:
                 st.caption("Avg HR")
@@ -540,7 +530,6 @@ elif selected_tab == "Field (Runs)":
             
             btn_text = "Update Activity" if edit_run_id else "Save Activity"
             
-            # Submit Logic
             if st.form_submit_button(btn_text):
                 new_id = int(time.time() * 1000)
                 run_obj = {
@@ -548,7 +537,7 @@ elif selected_tab == "Field (Runs)":
                     "date": str(act_date), "type": act_type, "distance": dist, 
                     "duration": parse_time_input(dur_str),
                     "avgHr": hr, "rpe": rpe, "feel": feel, 
-                    "cadence": cadence, "power": power, # New fields
+                    "cadence": cadence, "power": power,
                     "z1": parse_time_input(z1), "z2": parse_time_input(z2),
                     "z3": parse_time_input(z3), "z4": parse_time_input(z4), "z5": parse_time_input(z5), 
                     "notes": notes
@@ -654,12 +643,10 @@ elif selected_tab == "Field (Runs)":
                                 persist()
                                 st.rerun()
                         
-                        # Details Expander with new data
                         with st.expander("See Details", expanded=False):
                              dc1, dc2 = st.columns(2)
                              with dc1:
                                  st.markdown(f"**Notes:** {row.get('notes', '-')}")
-                                 # Show Cadence/Power here
                                  if row.get('cadence', 0) > 0 or row.get('power', 0) > 0:
                                      st.caption(f"**Cadence:** {row.get('cadence','-')} spm | **Power:** {row.get('power','-')} w")
                              with dc2:
@@ -678,45 +665,25 @@ elif selected_tab == "Field (Runs)":
 elif selected_tab == "Gym":
     st.header(":material/fitness_center: Gym & Weights")
     
-    # Initialize active workout session state
     if 'active_workout' not in st.session_state:
         st.session_state.active_workout = None
-    
-    # Save Dialog State
     if 'gym_save_dialog' not in st.session_state:
         st.session_state.gym_save_dialog = False
 
-    # --- Mode 1: Selection Screen ---
     if st.session_state.active_workout is None and not st.session_state.gym_save_dialog:
         col_rout, col_hist = st.tabs(["Start Workout", "History"])
-        
         with col_rout:
             st.subheader("Start from Routine")
             routine_opts = {r['name']: r for r in st.session_state.data['routines']}
-            
             if routine_opts:
                 sel_r_name = st.selectbox("Select Routine", list(routine_opts.keys()))
                 if st.button(":material/play_arrow: Start Workout", use_container_width=True):
-                    # Deep copy routine to active state
                     selected = routine_opts[sel_r_name]
-                    # Transform structure for active logging: Add sets array
-                    exercises_prep = []
-                    for ex_name in selected['exercises']:
-                        exercises_prep.append({
-                            "name": ex_name,
-                            "sets": [{"reps": "", "weight": ""} for _ in range(3)] # Default 3 empty sets
-                        })
-                    
-                    st.session_state.active_workout = {
-                        "routine_id": selected['id'],
-                        "routine_name": selected['name'],
-                        "date": datetime.now().date(),
-                        "exercises": exercises_prep
-                    }
+                    exercises_prep = [{"name": ex_name, "sets": [{"reps": "", "weight": ""} for _ in range(3)]} for ex_name in selected['exercises']]
+                    st.session_state.active_workout = {"routine_id": selected['id'], "routine_name": selected['name'], "date": datetime.now().date(), "exercises": exercises_prep}
                     st.rerun()
             else:
                 st.info("No routines found. Create one below.")
-
             st.divider()
             with st.expander("Manage Routines"):
                 with st.form("new_routine"):
@@ -729,7 +696,6 @@ elif selected_tab == "Gym":
                         persist()
                         st.success("Routine Created!")
                         st.rerun()
-                
                 for r in st.session_state.data['routines']:
                     c1, c2 = st.columns([5, 1])
                     c1.markdown(f"**{r['name']}**")
@@ -738,7 +704,6 @@ elif selected_tab == "Gym":
                         st.session_state.data['routines'] = [x for x in st.session_state.data['routines'] if x['id'] != r['id']]
                         persist()
                         st.rerun()
-
         with col_hist:
             sessions = st.session_state.data['gym_sessions']
             if sessions:
@@ -760,154 +725,88 @@ elif selected_tab == "Gym":
             else:
                 st.info("No gym sessions logged.")
 
-    # --- Mode 2: Active Logging Screen ---
     elif st.session_state.active_workout is not None and not st.session_state.gym_save_dialog:
         aw = st.session_state.active_workout
-        
-        # Header
         c_head, c_canc = st.columns([3, 1])
         c_head.subheader(f":material/fitness_center: {aw['routine_name']}")
         if c_canc.button("Cancel"):
             st.session_state.active_workout = None
             st.rerun()
-            
         aw['date'] = st.date_input("Date", aw['date'])
-        
         st.divider()
-        
-        # Exercises Loop
-        # We iterate by index to modify in place
         exercises_to_remove = []
-        
         for i, ex in enumerate(aw['exercises']):
             with st.container(border=True):
-                # Header Row: Name | History | Remove
                 ch1, ch2, ch3 = st.columns([3, 3, 1])
                 new_name = ch1.text_input(f"Exercise {i+1}", value=ex['name'], key=f"ex_name_{i}")
                 ex['name'] = new_name
-                
-                # History Lookup
                 last_stats = get_last_lift_stats(new_name)
-                if last_stats:
-                    ch2.info(f"Last: {last_stats}")
-                else:
-                    ch2.caption("No history found")
-                    
-                if ch3.button(":material/delete:", key=f"del_ex_{i}"):
-                    exercises_to_remove.append(i)
-                
-                # Sets Header
-                st.markdown(f"""
-                <div style="display:grid; grid-template-columns: 1fr 1fr 0.5fr; gap:10px; font-size:0.8rem; font-weight:600; color:#64748b; margin-bottom:5px;">
-                    <div>REPS</div><div>WEIGHT (kg)</div><div></div>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                # Sets Loop
+                if last_stats: ch2.info(f"Last: {last_stats}")
+                else: ch2.caption("No history found")
+                if ch3.button(":material/delete:", key=f"del_ex_{i}"): exercises_to_remove.append(i)
+                st.markdown("""<div style="display:grid; grid-template-columns: 1fr 1fr 0.5fr; gap:10px; font-size:0.8rem; font-weight:600; color:#64748b; margin-bottom:5px;"><div>REPS</div><div>WEIGHT (kg)</div><div></div></div>""", unsafe_allow_html=True)
                 sets_to_remove = []
                 for j, s in enumerate(ex['sets']):
                     c_reps, c_w, c_del = st.columns([1, 1, 0.5])
                     s['reps'] = c_reps.text_input("Reps", value=s['reps'], key=f"r_{i}_{j}", label_visibility="collapsed", placeholder="10")
                     s['weight'] = c_w.text_input("Weight", value=s['weight'], key=f"w_{i}_{j}", label_visibility="collapsed", placeholder="50")
-                    if c_del.button(":material/close:", key=f"del_set_{i}_{j}"):
-                        sets_to_remove.append(j)
-                
-                # Process Set Deletions
+                    if c_del.button(":material/close:", key=f"del_set_{i}_{j}"): sets_to_remove.append(j)
                 if sets_to_remove:
-                    for index in sorted(sets_to_remove, reverse=True):
-                        del ex['sets'][index]
+                    for index in sorted(sets_to_remove, reverse=True): del ex['sets'][index]
                     st.rerun()
-                
-                # Add Set Button
                 if st.button(f":material/add: Add Set", key=f"add_set_{i}"):
                     ex['sets'].append({"reps": "", "weight": ""})
                     st.rerun()
-
-        # Process Exercise Deletions
         if exercises_to_remove:
-            for index in sorted(exercises_to_remove, reverse=True):
-                del aw['exercises'][index]
+            for index in sorted(exercises_to_remove, reverse=True): del aw['exercises'][index]
             st.rerun()
-
-        # Add New Exercise Button
         if st.button(":material/add_circle: Add New Exercise"):
             aw['exercises'].append({"name": "New Exercise", "sets": [{"reps": "", "weight": ""} for _ in range(3)]})
             st.rerun()
-            
         st.divider()
         if st.button(":material/check_circle: Finish Workout", type="primary", use_container_width=True):
             st.session_state.gym_save_dialog = True
             st.rerun()
 
-    # --- Mode 3: Save Dialog ---
     elif st.session_state.gym_save_dialog:
         st.subheader("🎉 Workout Complete!")
         st.info("You modified the routine structure. Would you like to update the original routine?")
-        
         aw = st.session_state.active_workout
-        
         c1, c2 = st.columns(2)
-        
-        # Calculate Volume & Clean Data
         final_exercises = []
         total_vol = 0
         current_ex_names = []
-        
         for ex in aw['exercises']:
             clean_sets = []
             for s in ex['sets']:
-                # Basic validation: check if valid numbers
                 try:
                     r_val = float(s['reps'])
                     w_val = float(s['weight'])
-                    clean_sets.append({"reps": s['reps'], "weight": s['weight']}) # Store as string for flexibility, calc with float
+                    clean_sets.append({"reps": s['reps'], "weight": s['weight']})
                     total_vol += r_val * w_val
-                except:
-                    continue # Skip empty/invalid sets
-            
-            if clean_sets: # Only save exercises with valid sets
-                final_exercises.append({
-                    "name": ex['name'],
-                    "sets": clean_sets
-                })
+                except: continue
+            if clean_sets:
+                final_exercises.append({"name": ex['name'], "sets": clean_sets})
                 current_ex_names.append(ex['name'])
-
-        new_session = {
-            "id": int(time.time()),
-            "date": str(aw['date']),
-            "routineName": aw['routine_name'],
-            "exercises": final_exercises,
-            "totalVolume": total_vol
-        }
-
-        # Option 1: Update Routine
+        new_session = {"id": int(time.time()), "date": str(aw['date']), "routineName": aw['routine_name'], "exercises": final_exercises, "totalVolume": total_vol}
         if c1.button(":material/update: Save & Update Routine"):
-            # Update Routine Definition
             for r in st.session_state.data['routines']:
                 if r['id'] == aw['routine_id']:
                     r['exercises'] = current_ex_names
                     break
-            
-            # Save Session
             st.session_state.data['gym_sessions'].insert(0, new_session)
             persist()
-            
-            # Reset State
             st.session_state.active_workout = None
             st.session_state.gym_save_dialog = False
             st.success("Routine updated and workout logged!")
             st.rerun()
-
-        # Option 2: Just Save
         if c2.button(":material/save: Just Save Session"):
             st.session_state.data['gym_sessions'].insert(0, new_session)
             persist()
-            
             st.session_state.active_workout = None
             st.session_state.gym_save_dialog = False
             st.success("Workout logged!")
             st.rerun()
-            
         if st.button("Go Back"):
             st.session_state.gym_save_dialog = False
             st.rerun()
@@ -979,10 +878,8 @@ elif selected_tab == "Stats":
         list_h_df = health_df.sort_values(by='date', ascending=False)
         for index, row in list_h_df.iterrows():
              with st.container():
-                 # Mobile Optimized 3-col layout
                  hc1, hc2, hc3 = st.columns([2, 4, 1.5])
                  hc1.markdown(f"**{row['date'].date()}**")
-                 
                  stats_str = f"""
                  <div style="line-height:1.4;">
                     <span class="history-sub">RHR:</span> <b>{row['rhr']}</b> &nbsp; 
@@ -992,7 +889,6 @@ elif selected_tab == "Stats":
                  </div>
                  """
                  hc2.markdown(stats_str, unsafe_allow_html=True)
-                 
                  with hc3:
                     if st.button(":material/edit:", key=f"edit_h_{row['id']}"):
                         st.session_state.edit_hlth_id = row['id']
@@ -1007,73 +903,50 @@ elif selected_tab == "Stats":
 # --- TAB: TRENDS ---
 elif selected_tab == "Trends":
     st.header(":material/trending_up: Progress & Trends")
-    
     runs_df = pd.DataFrame(st.session_state.data['runs'])
     if runs_df.empty:
         st.info("Log some activities to see trends!")
     else:
         runs_df['date'] = pd.to_datetime(runs_df['date'])
-        # Avoid division by zero
         runs_df['pace'] = runs_df.apply(lambda x: x['duration'] / x['distance'] if x['distance'] > 0 else 0, axis=1)
         
         with st.container(border=True):
             st.subheader("Period Comparison")
             comp_mode = st.selectbox("Compare", ["Week vs Last Week", "Month vs Last Month", "6 Months", "Year vs Last Year"], label_visibility="collapsed")
-            
             today = datetime.now()
-            
-            if comp_mode == "Week vs Last Week":
-                days = 7
-            elif comp_mode == "Month vs Last Month":
-                days = 30
-            elif comp_mode == "6 Months":
-                days = 180
-            else:
-                days = 365
-                
+            if comp_mode == "Week vs Last Week": days = 7
+            elif comp_mode == "Month vs Last Month": days = 30
+            elif comp_mode == "6 Months": days = 180
+            else: days = 365
             curr_start = today - timedelta(days=days)
             prev_start = curr_start - timedelta(days=days)
-            
             curr_df = runs_df[(runs_df['date'] >= curr_start) & (runs_df['date'] <= today)]
             prev_df = runs_df[(runs_df['date'] >= prev_start) & (runs_df['date'] < curr_start)]
-            
             def calc_delta(curr, prev):
                 if prev == 0: return 0.0
                 return ((curr - prev) / prev) * 100
-            
-            # Metrics
             c_dist = curr_df['distance'].sum()
             p_dist = prev_df['distance'].sum()
             d_dist = calc_delta(c_dist, p_dist)
-            
             c_time = curr_df['duration'].sum()
             p_time = prev_df['duration'].sum()
             d_time = calc_delta(c_time, p_time)
-            
-            # Pace (lower is better, so we invert delta color logic manually or just show raw change)
-            # Weighted average pace = Total Time / Total Distance
             c_pace = c_time / c_dist if c_dist > 0 else 0
             p_pace = p_time / p_dist if p_dist > 0 else 0
             d_pace = calc_delta(c_pace, p_pace)
-            
             m1, m2, m3 = st.columns(3)
             m1.metric("Distance", f"{c_dist:.1f} km", f"{d_dist:.1f}%")
             m2.metric("Time", f"{int(c_time//60)}h {int(c_time%60)}m", f"{d_time:.1f}%")
             m3.metric("Avg Pace", format_pace(c_pace) + "/km", f"{d_pace:.1f}%", delta_color="inverse")
             
         st.subheader("Trends Visualized")
-        
         tab_vol, tab_pace = st.tabs(["Volume", "Pace Efficiency"])
-        
         with tab_vol:
-            # Aggregate by week
             vol_df = runs_df.set_index('date').resample('W').agg({'distance': 'sum'}).reset_index()
             fig_vol = px.bar(vol_df, x='date', y='distance', title="Weekly Distance Volume")
             fig_vol.update_layout(xaxis_title="", yaxis_title="Km", showlegend=False)
             st.plotly_chart(fig_vol, use_container_width=True)
-            
         with tab_pace:
-            # Scatter of pace over time
             pace_df = runs_df[runs_df['distance'] > 0].copy()
             fig_pace = px.scatter(pace_df, x='date', y='pace', color='type', title="Pace Evolution", trendline="lowess")
             fig_pace.update_layout(xaxis_title="", yaxis_title="Pace (min/km)")
@@ -1082,48 +955,44 @@ elif selected_tab == "Trends":
 # --- TAB: SHARE REPORT ---
 elif selected_tab == "Share":
     st.header(":material/share: Share Report")
-    
     with st.container(border=True):
         st.subheader("Generate Coach Summary")
-        
         c_dates, c_dummy = st.columns([2, 1])
         with c_dates:
             d_range = st.date_input("Date Range", value=(datetime.now() - timedelta(days=6), datetime.now()), format="YYYY/MM/DD")
-            
         if isinstance(d_range, tuple):
-            if len(d_range) == 2:
-                start_r, end_r = d_range
-            elif len(d_range) == 1:
-                start_r = d_range[0]
-                end_r = start_r
-            else:
-                start_r = datetime.now().date()
-                end_r = start_r
-        else:
-            start_r = d_range
-            end_r = d_range
-
+            if len(d_range) == 2: start_r, end_r = d_range
+            elif len(d_range) == 1: start_r, end_r = d_range[0], d_range[0]
+            else: start_r, end_r = datetime.now().date(), datetime.now().date()
+        else: start_r, end_r = d_range, d_range
         st.divider()
-        
         st.markdown("**Include Data:**")
-        
-        if 'share_cats' not in st.session_state:
-            st.session_state.share_cats = ["Run", "Walk", "Ultimate", "Gym", "Stats"]
-            
+        if 'share_cats' not in st.session_state: st.session_state.share_cats = ["Run", "Walk", "Ultimate", "Gym", "Stats"]
         all_cats = ["Run", "Walk", "Ultimate", "Gym", "Stats"]
         cols = st.columns(len(all_cats))
-        
         for i, cat in enumerate(all_cats):
             is_selected = cat in st.session_state.share_cats
             if cols[i].checkbox(cat, value=is_selected, key=f"share_{cat}"):
-                if cat not in st.session_state.share_cats:
-                    st.session_state.share_cats.append(cat)
+                if cat not in st.session_state.share_cats: st.session_state.share_cats.append(cat)
             else:
-                if cat in st.session_state.share_cats:
-                    st.session_state.share_cats.remove(cat)
-                    
+                if cat in st.session_state.share_cats: st.session_state.share_cats.remove(cat)
         st.divider()
-        
         if st.button("📄 Generate Text Report", type="primary"):
             report_text = generate_report(start_r, end_r, st.session_state.share_cats)
             st.text_area("Copy this text:", value=report_text, height=400)
+
+# --- TAB: IMPORT ---
+elif selected_tab == "Import":
+    st.header(":material/upload_file: Import Data")
+    with st.container(border=True):
+        st.info("Upload a Word (.docx) file containing reports in the standard format (e.g., '- MM-DD: Type Dist @ Time').")
+        uploaded_file = st.file_uploader("Choose a Word file", type="docx")
+        if uploaded_file is not None:
+            if st.button("Process Import"):
+                count, error = parse_imported_word_data(uploaded_file)
+                if error: st.error(f"Error: {error}")
+                elif count > 0:
+                    st.success(f"Successfully imported {count} activities!")
+                    time.sleep(1)
+                    st.rerun()
+                else: st.warning("No matching activities found in the document.")
