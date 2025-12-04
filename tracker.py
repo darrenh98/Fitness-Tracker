@@ -396,7 +396,7 @@ class PhysiologyEngine:
                 "recommendation": "Active Recovery / Rest",
                 "target_load": "Recovery (e.g., 30m easy jog or Rest)",
                 "message": "Red light. Focus on sleep and mobility today.",
-                "color": "#ef4444" # Red
+                "color": "#be123c" # Red
             }
         else:
             # Moderate Readiness
@@ -436,8 +436,9 @@ class PhysiologyEngine:
     def calculate_training_status(self, activity_history):
         """
         Calculates Acute:Chronic Workload Ratio (ACWR) and Status.
+        activity_history: list of dicts with {'date': 'YYYY-MM-DD', 'load': float, 'focus_type': str}
         """
-        today = get_malaysia_time().date()
+        today = datetime.now().date()
         
         acute_start = today - timedelta(days=6) # Last 7 days
         chronic_start = today - timedelta(days=27) # Last 28 days
@@ -445,19 +446,20 @@ class PhysiologyEngine:
         acute_load = 0
         chronic_load_total = 0
         
-        # Unified 'buckets' variable (Was previously mixed with bucket_totals)
+        # Bucket Accumulation (Chronic 4-week window)
         buckets = {'low': 0, 'high': 0, 'anaerobic': 0}
         
         for activity in activity_history:
             act_date = datetime.strptime(activity['date'], '%Y-%m-%d').date()
             load = activity.get('load', 0)
-            focus = activity.get('focus', {})
+            focus = activity.get('focus', {}) # This is now {type: total_load, others: 0}
             
             if acute_start <= act_date <= today:
                 acute_load += load
                 
             if chronic_start <= act_date <= today:
                 chronic_load_total += load
+                # Accumulate buckets based on the focus dict
                 buckets['low'] += focus.get('low', 0)
                 buckets['high'] += focus.get('high', 0)
                 buckets['anaerobic'] += focus.get('anaerobic', 0)
@@ -465,6 +467,7 @@ class PhysiologyEngine:
         chronic_load_weekly = chronic_load_total / 4.0 if chronic_load_total > 0 else 1.0
         ratio = acute_load / chronic_load_weekly
         
+        # Status Logic
         status = "Recovery"
         color_class = "status-gray"
         description = "Load is very low."
@@ -495,16 +498,17 @@ class PhysiologyEngine:
         total_chronic = chronic_load_total
         targets = {
             'low': {'min': total_chronic * 0.70, 'max': total_chronic * 0.90},
-            'high': {'min': total_chronic * 0.10, 'max': total_chronic * 0.25},
+            'high': {'min': total_chronic * 0.10, 'max': total_chronic * 0.25}, # widened slightly for flexibility
             'anaerobic': {'min': total_chronic * 0.0, 'max': total_chronic * 0.10}
         }
         
+        # Determine Shortages
         feedback = "Balanced! Well done."
         if buckets['low'] < targets['low']['min']:
             feedback = "Shortage: Low Aerobic. You need more easy base miles."
         elif buckets['high'] < targets['high']['min']:
              feedback = "Shortage: High Aerobic. Try a Tempo or Threshold run."
-        elif buckets['anaerobic'] < targets['anaerobic']['min'] and total_chronic > 500:
+        elif buckets['anaerobic'] < targets['anaerobic']['min'] and total_chronic > 500: # Only suggest anaerobic if base exists
              feedback = "Shortage: Anaerobic. Try some sprints or hill repeats."
         elif buckets['low'] > targets['low']['max']:
              feedback = "Focus: High Volume of Easy work detected."
@@ -1003,7 +1007,7 @@ elif selected_tab == "Cardio Training":
     
     # NO SMART DEFAULTS (Reset to 0)
     def_type = st.session_state.form_act_type
-    def_date = datetime.now()
+    def_date = get_malaysia_time()
     def_dist = 0.0
     def_dur = 0.0 # Will render as empty string or "00:00:00"
     def_hr = 0
