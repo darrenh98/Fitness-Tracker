@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import json
 import os
 from datetime import datetime, timedelta, date
@@ -35,7 +36,6 @@ def load_data():
     try:
         with open(DATA_FILE, 'r') as f:
             data = json.load(f)
-            # Migration checks
             if 'gender' not in data.get('user_profile', {}):
                 data['user_profile'].update({"gender": "Male", "hrMax": 190, "hrRest": 60, "vo2Max": 45})
             if 'monthAvgRHR' not in data.get('user_profile', {}):
@@ -55,6 +55,7 @@ def persist():
 
 # --- Helpers ---
 def get_malaysia_time():
+    # Returns datetime object for UTC+8
     return datetime.utcnow() + timedelta(hours=8)
 
 def format_pace(decimal_min):
@@ -156,7 +157,6 @@ class PhysiologyEngine:
             exponent = 1.92 if self.gender == 'male' else 1.67
             load = duration_min * hr_reserve * 0.64 * math.exp(exponent * hr_reserve)
             
-            # Fallback classification
             z2_upper = float(self.zones.get('z2_u', 145))
             z4_upper = float(self.zones.get('z4_u', 175))
             if avg_hr > z4_upper: focus_scores['anaerobic'] = load
@@ -168,11 +168,11 @@ class PhysiologyEngine:
     def get_daily_target(self, current_rhr):
         diff = current_rhr - self.hr_rest
         if diff < -2:
-            return {"readiness": "High", "recommendation": "Go Hard / Interval Day", "target_load": "Heavy (e.g., Threshold or 90m+ Long Run)", "message": "Green light. System primed.", "color": "#65a30d"}
+            return {"readiness": "High", "recommendation": "Go Hard / Interval Day", "target_load": "Heavy (e.g., Threshold)", "message": "Green light. System primed.", "color": "#65a30d", "bg": "#dcfce7"}
         elif diff > 5:
-            return {"readiness": "Low", "recommendation": "Active Recovery / Rest", "target_load": "Recovery (e.g., 30m easy jog)", "message": "Red light. Focus on sleep.", "color": "#be123c"}
+            return {"readiness": "Low", "recommendation": "Active Recovery", "target_load": "Recovery (e.g., 30m easy)", "message": "Red light. Focus on sleep.", "color": "#be123c", "bg": "#fee2e2"}
         else:
-            return {"readiness": "Moderate", "recommendation": "Steady State / Base", "target_load": "Maintenance (e.g., 45-60m Z2)", "message": "Train, but keep controlled.", "color": "#ea580c"}
+            return {"readiness": "Moderate", "recommendation": "Steady State", "target_load": "Maintenance (e.g., Z2)", "message": "Train, but keep controlled.", "color": "#ea580c", "bg": "#ffedd5"}
 
     def get_training_effect(self, trimp_score):
         scaling = self.vo2_max * 1.5
@@ -217,28 +217,15 @@ class PhysiologyEngine:
         description = "Load is very low."
 
         if ratio > 1.5:
-            status = "Overreaching"
-            color_class = "status-red"
-            description = "High injury risk! Spike in load."
+            status = "Overreaching"; color_class = "status-red"; description = "High injury risk! Spike in load."
         elif 1.3 <= ratio <= 1.5:
-            status = "High Strain"
-            color_class = "status-orange"
-            description = "Caution: Rapid load increase."
+            status = "High Strain"; color_class = "status-orange"; description = "Caution: Rapid load increase."
         elif 0.8 <= ratio < 1.3:
-            if acute_load > chronic_load_weekly:
-                status = "Productive"
-                color_class = "status-green"
-                description = "Optimal zone. Building fitness."
-            else:
-                status = "Maintaining"
-                color_class = "status-green"
-                description = "Load is consistent."
+            if acute_load > chronic_load_weekly: status = "Productive"; color_class = "status-green"; description = "Building fitness."
+            else: status = "Maintaining"; color_class = "status-green"; description = "Load is consistent."
         else:
-            status = "Recovery / Detraining"
-            color_class = "status-gray"
-            description = "Workload is decreasing."
+            status = "Recovery"; color_class = "status-gray"; description = "Workload is decreasing."
             
-        # Targets (80/20 model approx)
         total_chronic = chronic_load_total
         targets = {
             'low': {'min': total_chronic * 0.70, 'max': total_chronic * 0.90},
@@ -250,23 +237,15 @@ class PhysiologyEngine:
         if buckets['low'] < targets['low']['min']: feedback = "Shortage: Low Aerobic."
         elif buckets['high'] < targets['high']['min']: feedback = "Shortage: High Aerobic."
         elif buckets['anaerobic'] < targets['anaerobic']['min'] and total_chronic > 500: feedback = "Shortage: Anaerobic."
-        elif buckets['low'] > targets['low']['max']: feedback = "Focus: High Volume of Easy work."
 
         return {
-            "acute": round(acute_load),
-            "chronic": round(chronic_load_weekly),
-            "ratio": round(ratio, 2),
-            "status": status,
-            "css": color_class,
-            "desc": description,
-            "buckets": buckets,
-            "targets": targets,
-            "feedback": feedback,
-            "total_4w": total_chronic
+            "acute": round(acute_load), "chronic": round(chronic_load_weekly),
+            "ratio": round(ratio, 2), "status": status, "css": color_class,
+            "desc": description, "buckets": buckets, "targets": targets,
+            "feedback": feedback, "total_4w": total_chronic
         }
 
 # --- UI Render Functions ---
-
 def setup_page():
     st.markdown("""
     <style>
@@ -280,7 +259,16 @@ def setup_page():
         [data-testid="stVerticalBlock"] > [style*="flex-direction: column;"] > [data-testid="stVerticalBlock"] > [data-testid="stContainer"] {
             background-color: #ffffff; padding: 1.25rem; border-radius: 0.75rem; border: 1px solid #e7e5e4; margin-bottom: 1.0rem; box-shadow: 0 1px 2px 0 rgba(68, 64, 60, 0.05);
         }
-        [data-testid="stMetricValue"] { font-size: 1.8rem; font-weight: 800; color: #44403c; }
+        /* Boxing every metric for dashboard feel */
+        [data-testid="stMetric"] {
+            background-color: #ffffff;
+            padding: 15px;
+            border-radius: 12px;
+            box-shadow: 0 1px 3px 0 rgba(0,0,0,0.05);
+            border: 1px solid #e7e5e4;
+            text-align: center;
+        }
+        [data-testid="stMetricValue"] { font-size: 1.6rem; font-weight: 800; color: #44403c; }
         [data-testid="stMetricLabel"] { font-size: 0.75rem; font-weight: 600; color: #a8a29e; letter-spacing: 0.05em; text-transform: uppercase; }
         .history-label { font-size: 0.7rem; text-transform: uppercase; color: #a8a29e; font-weight: 600; margin-bottom: 0px; }
         .history-value { font-size: 1rem; font-weight: 600; color: #57534e; }
@@ -313,10 +301,8 @@ def render_sidebar():
         st.title(":material/sprint: RunLog Hub")
         malaysia_time = get_malaysia_time()
         st.caption(f"🇲🇾 {malaysia_time.strftime('%d %b %Y, %H:%M')}")
-        
         selected_tab = st.radio("Navigate", ["Training Status", "Cardio Training", "Gym", "Plan", "Trends", "Share"], label_visibility="collapsed")
         st.divider()
-        
         with st.expander("👤 Athlete Profile"):
             prof = st.session_state.data['user_profile']
             c1, c2 = st.columns(2)
@@ -326,12 +312,10 @@ def render_sidebar():
             c3, c5 = st.columns(2)
             hr_max = c3.number_input("Max HR", value=int(prof.get('hrMax', 190)))
             vo2 = c5.number_input("VO2 Max", value=float(prof.get('vo2Max', 45)))
-            
             st.markdown("**Monthly Averages**")
             cm1, cm2 = st.columns(2)
             m_rhr = cm1.number_input("Avg RHR", value=int(prof.get('monthAvgRHR', 60)))
             m_hrv = cm2.number_input("Avg HRV", value=int(prof.get('monthAvgHRV', 40)))
-
             st.markdown("**Heart Rate Zones**")
             cz = prof.get('zones', {})
             z1_u = st.number_input("Z1 Upper", value=int(cz.get('z1_u', 130)))
@@ -345,26 +329,23 @@ def render_sidebar():
             z4_l = c_z4l.number_input("Z4 Lower", value=int(cz.get('z4_l', 161)))
             z4_u = c_z4u.number_input("Z4 Upper", value=int(cz.get('z4_u', 175)))
             z5_l = st.number_input("Z5 Lower", value=int(cz.get('z5_l', 176)))
-
             if st.button("Save Profile"):
                 st.session_state.data['user_profile'].update({
                     'weight': new_weight, 'height': new_height, 'gender': gender,
-                    'hrMax': hr_max, 'hrRest': m_rhr, 'vo2Max': vo2,
-                    'monthAvgRHR': m_rhr, 'monthAvgHRV': m_hrv,
+                    'hrMax': hr_max, 'hrRest': m_rhr, 'vo2Max': vo2, 'monthAvgRHR': m_rhr, 'monthAvgHRV': m_hrv,
                     'zones': {"z1_u": z1_u, "z2_l": z2_l, "z2_u": z2_u, "z3_l": z3_l, "z3_u": z3_u, "z4_l": z4_l, "z4_u": z4_u, "z5_l": z5_l}
                 })
-                persist()
-                st.success("Saved!")
+                persist(); st.success("Saved!")
         return selected_tab
 
 def render_training_status():
     st.header(":material/monitor_heart: Training Status")
+    setup_page()
     
-    # Morning Update
     with st.container(border=True):
         c_header, c_date = st.columns([3, 2])
         c_header.subheader("☀️ Morning Update")
-        h_date = c_date.date_input("Log Date", datetime.now(), label_visibility="collapsed")
+        h_date = c_date.date_input("Log Date", get_malaysia_time(), label_visibility="collapsed")
         existing_log = next((log for log in st.session_state.data['health_logs'] if log['date'] == str(h_date)), None)
         
         if 'edit_morning_date' not in st.session_state: st.session_state.edit_morning_date = None
@@ -373,18 +354,13 @@ def render_training_status():
         if existing_log and not is_editing:
             v1, v2, v3, v4 = st.columns(4)
             v1.metric("Sleep", format_sleep(existing_log['sleepHours']))
-            v2.metric("RHR", f"{existing_log['rhr']} bpm")
-            v3.metric("HRV", f"{existing_log['hrv']} ms")
+            v2.metric("RHR", f"{existing_log['rhr']}")
+            v3.metric("HRV", f"{existing_log['hrv']}")
             with v4:
                 st.write("")
                 col_e, col_d = st.columns(2)
-                if col_e.button(":material/edit:", key=f"edit_m_{existing_log['id']}"):
-                    st.session_state.edit_morning_date = str(h_date)
-                    st.rerun()
-                if col_d.button(":material/delete:", key=f"del_m_{existing_log['id']}"):
-                    st.session_state.data['health_logs'] = [h for h in st.session_state.data['health_logs'] if h['id'] != existing_log['id']]
-                    persist()
-                    st.rerun()
+                if col_e.button(":material/edit:", key=f"edit_m_{existing_log['id']}"): st.session_state.edit_morning_date = str(h_date); st.rerun()
+                if col_d.button(":material/delete:", key=f"del_m_{existing_log['id']}"): st.session_state.data['health_logs'] = [h for h in st.session_state.data['health_logs'] if h['id'] != existing_log['id']]; persist(); st.rerun()
         else:
             def_rhr = existing_log['rhr'] if existing_log else 60
             def_hrv = existing_log['hrv'] if existing_log else 40
@@ -394,37 +370,30 @@ def render_training_status():
                 sleep_str = c_sleep.text_input("Sleep (hh:mm)", value=def_sleep_str, placeholder="07:30")
                 rhr = c_rhr.number_input("RHR", min_value=30, max_value=150, value=int(def_rhr))
                 hrv = c_hrv.number_input("HRV", min_value=0, value=int(def_hrv))
-                btn_label = "Update Stats" if existing_log else "Log Stats"
+                btn_label = "Update" if existing_log else "Log"
                 c_btn.write(""); c_btn.write("")
                 if c_btn.form_submit_button(btn_label, use_container_width=True):
                     sleep_dec = parse_time_input(sleep_str)
-                    new_h = {"id": existing_log['id'] if existing_log else int(time.time()), 
-                             "date": str(h_date), "rhr": rhr, "hrv": hrv, "sleepHours": sleep_dec, "vo2Max": 0}
+                    new_h = {"id": existing_log['id'] if existing_log else int(time.time()), "date": str(h_date), "rhr": rhr, "hrv": hrv, "sleepHours": sleep_dec, "vo2Max": 0}
                     if existing_log:
                         idx = next((i for i, h in enumerate(st.session_state.data['health_logs']) if h['id'] == existing_log['id']), -1)
                         if idx != -1: st.session_state.data['health_logs'][idx] = new_h
-                        st.session_state.edit_morning_date = None
-                        st.success("Updated!")
+                        st.session_state.edit_morning_date = None; st.success("Updated!")
                     else:
-                        st.session_state.data['health_logs'].insert(0, new_h)
-                        st.success("Logged!")
-                    persist()
-                    st.rerun()
+                        st.session_state.data['health_logs'].insert(0, new_h); st.success("Logged!")
+                    persist(); st.rerun()
             if is_editing:
                 if st.button("Cancel Edit"): st.session_state.edit_morning_date = None; st.rerun()
     
-        # Daily Target
         display_log = existing_log if existing_log else (st.session_state.data['health_logs'][0] if st.session_state.data['health_logs'] else None)
         if display_log:
             prof = st.session_state.data['user_profile']
             base_rhr = prof.get('monthAvgRHR', 60)
             engine = PhysiologyEngine(st.session_state.data['user_profile'])
             target_data = engine.get_daily_target(display_log['rhr'])
-            st.markdown(f"""<div class="daily-target" style="border-left: 6px solid {target_data['color']};"><div class="target-header"><span style="color: {target_data['color']};">{target_data['readiness']} Readiness</span><span style="font-weight:400; color:#64748b; font-size:0.9rem;">• RHR {display_log['rhr']} (Base {base_rhr})</span></div><div style="font-size: 1.2rem; font-weight:700; color:#1e293b;">{target_data['recommendation']}</div><div class="target-load">Target: {target_data['target_load']}</div><div style="font-size: 0.9rem; color:#475569; font-style:italic;">"{target_data['message']}"</div></div>""", unsafe_allow_html=True)
+            st.markdown(f"""<div class="daily-target" style="border-left: 6px solid {target_data['color']}; background-color: {target_data.get('bg', '#ffffff')};"><div class="target-header"><span style="color: {target_data['color']};">{target_data['readiness']} Readiness</span><span style="font-weight:400; color:#64748b; font-size:0.9rem;">• RHR {display_log['rhr']} (Base {base_rhr})</span></div><div style="font-size: 1.2rem; font-weight:700; color:#1e293b;">{target_data['recommendation']}</div><div class="target-load">Target: {target_data['target_load']}</div><div style="font-size: 0.9rem; color:#475569; font-style:italic;">"{target_data['message']}"</div></div>""", unsafe_allow_html=True)
 
     st.divider()
-
-    # Status & Load
     engine = PhysiologyEngine(st.session_state.data['user_profile'])
     history_data = []
     runs = st.session_state.data['runs']
@@ -443,21 +412,18 @@ def render_training_status():
             st.markdown(f"<div style='margin-top:10px; font-weight:500; color:#4b5563;'>{status_data['feedback']}</div>", unsafe_allow_html=True)
         with sc2:
             ratio_val = status_data['ratio']
-            st.metric("Acute:Chronic Ratio", ratio_val, delta=None)
+            st.metric("ACWR", ratio_val, delta=None)
             gauge_html = f"""<div style="height: 10px; width: 100%; background: #e2e8f0; border-radius: 5px; margin-top: 10px; position: relative;"><div style="height: 100%; width: {min(ratio_val/2.0 * 100, 100)}%; background: {'#22c55e' if 0.8 <= ratio_val <= 1.3 else '#ef4444' if ratio_val > 1.5 else '#f97316'}; border-radius: 5px;"></div><div style="position: absolute; top: -5px; left: 50%; height: 20px; width: 2px; background: black;"></div></div><div style="display: flex; justify-content: space-between; font-size: 0.7rem; color: #64748b;"><span>0.0</span><span>1.0</span><span>2.0+</span></div>"""
             st.markdown(gauge_html, unsafe_allow_html=True)
-            
     c1, c2 = st.columns(2)
     with c1: st.metric("Acute Load (7d)", int(status_data['acute']))
     with c2: st.metric("Chronic Load (28d)", int(status_data['chronic']))
-    
     st.divider()
     st.subheader("Load Focus (4 weeks)")
     buckets = status_data['buckets']
     targets = status_data['targets']
     total_4w = status_data['total_4w']
     max_scale = max(targets['low']['max'], buckets['low'], 1) * 1.2
-
     def draw_focus_bar(label, current, t_min, t_max, color):
         curr_pct = min((current / max_scale) * 100, 100)
         min_pct = min((t_min / max_scale) * 100, 100)
@@ -467,29 +433,25 @@ def render_training_status():
         elif current > t_max: status_txt = "Over-focus"
         else: status_txt = "Balanced"
         return f"""<div style="margin-bottom: 12px;"><div class="load-label"><span>{label}</span> <span>{int(current)} <span style="font-weight:400; font-size:0.7rem;">({status_txt})</span></span></div><div class="load-bar-container"><div class="load-bar-target" style="left: {min_pct}%; width: {width_pct}%;"></div><div class="load-bar-fill" style="width: {curr_pct}%; background-color: {color}; opacity: 0.8;"></div></div></div>"""
-
     st.markdown(draw_focus_bar("Anaerobic (Purple)", buckets['anaerobic'], targets['anaerobic']['min'], targets['anaerobic']['max'], "#8b5cf6"), unsafe_allow_html=True)
     st.markdown(draw_focus_bar("High Aerobic (Orange)", buckets['high'], targets['high']['min'], targets['high']['max'], "#f97316"), unsafe_allow_html=True)
     st.markdown(draw_focus_bar("Low Aerobic (Blue)", buckets['low'], targets['low']['min'], targets['low']['max'], "#3b82f6"), unsafe_allow_html=True)
 
 def render_cardio():
     st.header(":material/directions_run: Cardio Training")
+    setup_page()
     runs_df = pd.DataFrame(st.session_state.data['runs'])
     engine = PhysiologyEngine(st.session_state.data['user_profile'])
-    
     if 'run_log_success' in st.session_state and st.session_state.run_log_success:
         st.toast("✅ Activity Logged Successfully!")
         st.session_state.run_log_success = False
-
     edit_run_id = st.session_state.get('edit_run_id', None)
     if 'form_act_type' not in st.session_state: st.session_state.form_act_type = "Run"
-    
     def_type = st.session_state.form_act_type
     def_date = get_malaysia_time()
     def_dist, def_dur, def_hr, def_cad, def_pwr = 0.0, 0.0, 0, 0, 0
     def_notes, def_feel, def_rpe = "", "Normal", 5
     def_z1, def_z2, def_z3, def_z4, def_z5 = "", "", "", "", ""
-    
     if edit_run_id:
         run_data = next((r for r in st.session_state.data['runs'] if r['id'] == edit_run_id), None)
         if run_data:
@@ -509,10 +471,8 @@ def render_cardio():
             def_z4 = format_duration(run_data.get('z4', 0))
             def_z5 = format_duration(run_data.get('z5', 0))
             scroll_to_top()
-
     form_label = f":material/edit: Edit Activity" if edit_run_id else ":material/add_circle: Log Activity"
     expander_state = True if edit_run_id else False
-
     with st.expander(form_label, expanded=expander_state):
         key_suffix = f"{edit_run_id}" if edit_run_id else "new"
         with st.form("run_form", clear_on_submit=True):
@@ -558,17 +518,11 @@ def render_cardio():
             feel = st.radio("Feel", ["Good", "Normal", "Tired", "Pain"], index=feel_idx, horizontal=True, label_visibility="collapsed", key=f"feel_{key_suffix}")
             st.caption("Notes")
             notes = st.text_area("Notes", value=def_notes, placeholder="Easy run, felt strong...", height=3, label_visibility="collapsed", key=f"notes_{key_suffix}")
-            
             if st.form_submit_button("Update Activity" if edit_run_id else "Save Activity"):
                 new_id = int(time.time() * 1000)
                 dist_save = dist if dist is not None else 0.0
                 run_obj = {
-                    "id": edit_run_id if edit_run_id else new_id,
-                    "date": str(act_date), "type": act_type, "distance": dist_save, 
-                    "duration": parse_time_input(dur_str), "avgHr": hr, "rpe": rpe, "feel": feel, 
-                    "cadence": cadence, "power": power,
-                    "z1": parse_time_input(z1), "z2": parse_time_input(z2), "z3": parse_time_input(z3), 
-                    "z4": parse_time_input(z4), "z5": parse_time_input(z5), "notes": notes
+                    "id": edit_run_id if edit_run_id else new_id, "date": str(act_date), "type": act_type, "distance": dist_save, "duration": parse_time_input(dur_str), "avgHr": hr, "rpe": rpe, "feel": feel, "cadence": cadence, "power": power, "z1": parse_time_input(z1), "z2": parse_time_input(z2), "z3": parse_time_input(z3), "z4": parse_time_input(z4), "z5": parse_time_input(z5), "notes": notes
                 }
                 if edit_run_id:
                     idx = next((i for i, r in enumerate(st.session_state.data['runs']) if r['id'] == edit_run_id), -1)
@@ -583,9 +537,8 @@ def render_cardio():
     st.markdown("### Dashboard & History")
     if 'dash_period' not in st.session_state: st.session_state.dash_period = "Weekly"
     if 'dash_offset' not in st.session_state: st.session_state.dash_offset = 0
-
     def get_date_range(period, offset):
-        today = datetime.now().date()
+        today = get_malaysia_time().date()
         if period == "Weekly":
             start_of_week = today - timedelta(days=today.weekday())
             start_date = start_of_week - timedelta(weeks=offset)
@@ -659,7 +612,6 @@ def render_cardio():
                 for idx, row in filtered_df.iterrows():
                     zones = [float(row.get(f'z{i}', 0)) for i in range(1,6)]
                     trimp, focus = engine.calculate_trimp(float(row['duration']), int(row['avgHr']), zones)
-                    focus_type = next((k for k, v in focus.items() if v > 0), "low")
                     te, te_label = engine.get_training_effect(trimp)
                     with st.container(border=True):
                         c_date, c_type, c_stats, c_metrics, c_act = st.columns([1.5, 1.2, 2.5, 2.5, 1])
