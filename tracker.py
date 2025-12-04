@@ -8,12 +8,7 @@ from datetime import datetime, timedelta, date
 import time
 import copy
 import re
-
-# Try to import docx, handle if not installed immediately
-try:
-    from docx import Document
-except ImportError:
-    Document = None
+import streamlit.components.v1 as components
 
 # --- Configuration & Styling ---
 st.set_page_config(
@@ -77,9 +72,9 @@ st.markdown("""
         background-color: #ffffff;
         padding: 1.25rem;
         border-radius: 0.75rem;
-        border: 1px solid #f1f5f9;
-        margin-bottom: 1.5rem; /* Increased spacing between logs */
-        box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+        border: 1px solid #e2e8f0; /* Slightly darker border for better visibility */
+        margin-bottom: 1.0rem;
+        box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.05);
     }
 
     /* Metrics Styling */
@@ -187,7 +182,6 @@ DEFAULT_DATA = {
         {"id": 1, "name": "Leg Day", "exercises": ["Squats", "Split Squats", "Glute Bridges", "Calf Raises"]},
         {"id": 2, "name": "Upper Body", "exercises": ["Bench Press", "Pull Ups", "Overhead Press", "Rows"]}
     ],
-    "templates": {},
     "user_profile": {"age": 30, "height": 175, "weight": 70, "heightUnit": "cm", "weightUnit": "kg"},
     "cycles": {"macro": "", "meso": "", "micro": ""},
     "weekly_plan": {day: {"am": "", "pm": ""} for day in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']}
@@ -199,8 +193,6 @@ def load_data():
     try:
         with open(DATA_FILE, 'r') as f:
             data = json.load(f)
-            if "templates" not in data:
-                data["templates"] = {}
             return data
     except:
         return DEFAULT_DATA
@@ -256,6 +248,16 @@ def parse_time_input(time_str):
         return 0.0
     except:
         return 0.0
+        
+def scroll_to_top():
+    """Injects JS to scroll to top of page"""
+    js = """
+    <script>
+        var body = window.parent.document.querySelector(".main");
+        if (body) { body.scrollTop = 0; }
+    </script>
+    """
+    components.html(js, height=0)
 
 def generate_report(start_date, end_date, selected_cats):
     report = [f"📊 **Training Report**"]
@@ -331,42 +333,11 @@ def generate_report(start_date, end_date, selected_cats):
 
     return "\n".join(report)
 
-def parse_imported_word_data(docx_file):
-    if Document is None:
-        return 0, "python-docx not installed"
-    try:
-        doc = Document(docx_file)
-        count = 0
-        current_year = datetime.now().year
-        pattern = r"- (\d{2}-\d{2}): (Run|Walk|Ultimate) (\d+\.?\d*)km @ (\d{2}:\d{2}:\d{2})"
-        new_runs = []
-        for para in doc.paragraphs:
-            text = para.text.strip()
-            match = re.search(pattern, text)
-            if match:
-                date_str, type_str, dist_str, dur_str = match.groups()
-                full_date_str = f"{current_year}-{date_str}"
-                dur_decimal = parse_time_input(dur_str)
-                new_run = {
-                    "id": int(time.time() * 1000) + count,
-                    "date": full_date_str, "type": type_str, "distance": float(dist_str),
-                    "duration": dur_decimal, "avgHr": 0, "rpe": 5, "feel": "Normal", "notes": "Imported",
-                    "z1": 0, "z2": 0, "z3": 0, "z4": 0, "z5": 0, "cadence": 0, "power": 0
-                }
-                new_runs.append(new_run)
-                count += 1
-        if new_runs:
-            st.session_state.data['runs'].extend(new_runs)
-            st.session_state.data['runs'].sort(key=lambda x: x['date'], reverse=True)
-            persist()
-        return count, ""
-    except Exception as e:
-        return 0, str(e)
-
 # --- Sidebar Navigation ---
 with st.sidebar:
     st.title(":material/sprint: RunLog Hub")
-    selected_tab = st.radio("Navigate", ["Plan", "Field (Runs)", "Gym", "Stats", "Trends", "Share", "Import"], label_visibility="collapsed")
+    # Removed Import from navigation
+    selected_tab = st.radio("Navigate", ["Plan", "Field (Runs)", "Gym", "Stats", "Trends", "Share"], label_visibility="collapsed")
     st.divider()
     
     with st.expander("👤 Athlete Profile"):
@@ -451,35 +422,29 @@ elif selected_tab == "Field (Runs)":
             def_dist = run_data['distance']
             def_dur = run_data['duration']
             def_hr = run_data['avgHr']
+            def_cad = run_data.get('cadence', 0)
+            def_pwr = run_data.get('power', 0)
             def_notes = run_data.get('notes', '')
             def_feel = run_data.get('feel', 'Normal')
             def_rpe = run_data.get('rpe', 5)
-            def_cad = run_data.get('cadence', 0)
-            def_pwr = run_data.get('power', 0)
             def_z1 = format_duration(run_data.get('z1', 0))
             def_z2 = format_duration(run_data.get('z2', 0))
             def_z3 = format_duration(run_data.get('z3', 0))
             def_z4 = format_duration(run_data.get('z4', 0))
             def_z5 = format_duration(run_data.get('z5', 0))
+            
+            # Scroll to top when editing is activated (and we are rendering the edit form)
+            scroll_to_top()
 
     form_label = f":material/edit: Edit Activity" if edit_run_id else ":material/add_circle: Log Activity"
     # Auto collapse if not editing
     expander_state = True if edit_run_id else False
 
     with st.expander(form_label, expanded=expander_state):
-        if not edit_run_id:
-            col_t1, col_t2 = st.columns([3, 1])
-            with col_t1:
-                templates = st.session_state.data.get('templates', {})
-                template_names = ["None"] + list(templates.keys())
-                sel_template = st.selectbox(":material/folder_open: Load Template", template_names, label_visibility="collapsed")
-                if sel_template != "None":
-                    t_data = templates[sel_template]
-                    def_type = t_data.get('type', "Run")
-                    def_dist = t_data.get('distance', 5.0)
-                    def_dur = t_data.get('duration', 30.0)
-                    def_notes = t_data.get('notes', "")
-                    st.session_state.form_act_type = def_type
+        # Removed Template Loading Logic
+
+        # Dynamic key suffix to ensure fresh form state when switching between entries or modes
+        key_suffix = f"{edit_run_id}" if edit_run_id else "new"
 
         # Clear on submit resets the form to empty/0 values automatically
         with st.form("run_form", clear_on_submit=True):
@@ -487,10 +452,12 @@ elif selected_tab == "Field (Runs)":
             c_d, c_t = st.columns([1, 3])
             with c_d:
                 st.caption("Date")
-                act_date = st.date_input("Date", def_date, label_visibility="collapsed")
+                act_date = st.date_input("Date", def_date, label_visibility="collapsed", key=f"date_{key_suffix}")
             with c_t:
                 st.caption("Activity Type")
-                act_type = st.radio("Type", ["Run", "Walk", "Ultimate"], index=["Run", "Walk", "Ultimate"].index(def_type) if def_type in ["Run", "Walk", "Ultimate"] else 0, key="act_type_radio", horizontal=True, label_visibility="collapsed")
+                # Correctly set index based on def_type (which comes from run_data in Edit mode)
+                type_idx = ["Run", "Walk", "Ultimate"].index(def_type) if def_type in ["Run", "Walk", "Ultimate"] else 0
+                act_type = st.radio("Type", ["Run", "Walk", "Ultimate"], index=type_idx, key=f"type_{key_suffix}", horizontal=True, label_visibility="collapsed")
             
             # Row 2: Dist | Duration
             c1, c2 = st.columns(2)
@@ -498,40 +465,41 @@ elif selected_tab == "Field (Runs)":
                 st.caption("Distance (km)")
                 # Use None for placeholder effect if default is 0.0 and not editing
                 dist_val = float(def_dist) if edit_run_id or def_dist > 0 else None
-                dist = st.number_input("Distance", min_value=0.0, step=0.01, value=dist_val, placeholder="0.00", label_visibility="collapsed")
+                dist = st.number_input("Distance", min_value=0.0, step=0.01, value=dist_val, placeholder="0.00", label_visibility="collapsed", key=f"dist_{key_suffix}")
             with c2:
                 st.caption("Duration (hh:mm:ss)")
                 # If new log, show empty string so placeholder shows "00:30:00"
                 dur_val = format_duration(def_dur) if edit_run_id or def_dur > 0 else ""
-                dur_str = st.text_input("Duration", value=dur_val, placeholder="00:30:00", label_visibility="collapsed")
+                dur_str = st.text_input("Duration", value=dur_val, placeholder="00:30:00", label_visibility="collapsed", key=f"dur_{key_suffix}")
             
             c3, c4, c5, c6 = st.columns(4)
             with c3:
                 st.caption("Avg HR")
-                hr = st.number_input("Heart Rate", min_value=0, value=int(def_hr), label_visibility="collapsed")
+                hr = st.number_input("Heart Rate", min_value=0, value=int(def_hr), label_visibility="collapsed", key=f"hr_{key_suffix}")
             with c4:
                 st.caption("RPE (1-10)")
-                rpe = st.number_input("RPE", min_value=1, max_value=10, value=int(def_rpe), label_visibility="collapsed")
+                rpe = st.number_input("RPE", min_value=1, max_value=10, value=int(def_rpe), label_visibility="collapsed", key=f"rpe_{key_suffix}")
             with c5:
                 st.caption("Cadence (spm)")
-                cadence = st.number_input("Cadence", min_value=0, value=int(def_cad), label_visibility="collapsed")
+                cadence = st.number_input("Cadence", min_value=0, value=int(def_cad), label_visibility="collapsed", key=f"cad_{key_suffix}")
             with c6:
                 st.caption("Power (w)")
-                power = st.number_input("Power", min_value=0, value=int(def_pwr), label_visibility="collapsed")
+                power = st.number_input("Power", min_value=0, value=int(def_pwr), label_visibility="collapsed", key=f"pwr_{key_suffix}")
 
             st.caption("Heart Rate Zones (Time in mm:ss)")
             rc1, rc2, rc3, rc4, rc5 = st.columns(5)
-            z1 = rc1.text_input("Zone 1", value=def_z1, placeholder="00:00")
-            z2 = rc2.text_input("Zone 2", value=def_z2, placeholder="00:00")
-            z3 = rc3.text_input("Zone 3", value=def_z3, placeholder="00:00")
-            z4 = rc4.text_input("Zone 4", value=def_z4, placeholder="00:00")
-            z5 = rc5.text_input("Zone 5", value=def_z5, placeholder="00:00")
+            z1 = rc1.text_input("Zone 1", value=def_z1, placeholder="00:00", key=f"z1_{key_suffix}")
+            z2 = rc2.text_input("Zone 2", value=def_z2, placeholder="00:00", key=f"z2_{key_suffix}")
+            z3 = rc3.text_input("Zone 3", value=def_z3, placeholder="00:00", key=f"z3_{key_suffix}")
+            z4 = rc4.text_input("Zone 4", value=def_z4, placeholder="00:00", key=f"z4_{key_suffix}")
+            z5 = rc5.text_input("Zone 5", value=def_z5, placeholder="00:00", key=f"z5_{key_suffix}")
             
             st.caption("How did it feel?")
-            feel = st.radio("Feel", ["Good", "Normal", "Tired", "Pain"], index=["Good", "Normal", "Tired", "Pain"].index(def_feel) if def_feel in ["Good", "Normal", "Tired", "Pain"] else 1, horizontal=True, label_visibility="collapsed")
+            feel_idx = ["Good", "Normal", "Tired", "Pain"].index(def_feel) if def_feel in ["Good", "Normal", "Tired", "Pain"] else 1
+            feel = st.radio("Feel", ["Good", "Normal", "Tired", "Pain"], index=feel_idx, horizontal=True, label_visibility="collapsed", key=f"feel_{key_suffix}")
             
             st.caption("Notes")
-            notes = st.text_area("Notes", value=def_notes, placeholder="Easy run, felt strong...", height=3, label_visibility="collapsed")
+            notes = st.text_area("Notes", value=def_notes, placeholder="Easy run, felt strong...", height=3, label_visibility="collapsed", key=f"notes_{key_suffix}")
             
             btn_text = "Update Activity" if edit_run_id else "Save Activity"
             
@@ -562,16 +530,6 @@ elif selected_tab == "Field (Runs)":
                 persist()
                 st.rerun()
                 
-        if not edit_run_id:
-            with st.popover(":material/save: Save as Template"):
-                tpl_name = st.text_input("Template Name", placeholder="Morning 5k")
-                if st.button("Save Template"):
-                    if tpl_name:
-                        dist_save = dist if dist is not None else 0.0
-                        st.session_state.data['templates'][tpl_name] = {"type": def_type, "distance": dist_save, "duration": parse_time_input(dur_str), "notes": notes}
-                        persist()
-                        st.success(f"Saved '{tpl_name}'!")
-                        st.rerun()
         if edit_run_id:
             if st.button("Cancel Edit"):
                 st.session_state.edit_run_id = None
@@ -701,7 +659,7 @@ elif selected_tab == "Field (Runs)":
                 filtered_df = filtered_df.sort_values(by='dt_obj', ascending=False)
 
                 for idx, row in filtered_df.iterrows():
-                    with st.container():
+                    with st.container(border=True):
                         c_main, c_stats, c_extra, c_act = st.columns([2, 3, 2, 1.5])
                         icon_map = {"Run": ":material/directions_run:", "Walk": ":material/directions_walk:", "Ultimate": ":material/sports_handball:"}
                         
