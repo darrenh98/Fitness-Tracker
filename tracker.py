@@ -206,10 +206,44 @@ st.markdown("""
         gap: 8px;
     }
     .target-load {
-        font-size: 2rem;
-        font-weight: 800;
+        font-size: 1.2rem;
+        font-weight: 700;
         color: #0f172a;
         margin: 0.5rem 0;
+    }
+    
+    /* Load Focus Bars */
+    .load-bar-container {
+        position: relative;
+        height: 24px;
+        background-color: #f1f5f9;
+        border-radius: 12px;
+        margin-bottom: 8px;
+        margin-top: 4px;
+    }
+    .load-bar-fill {
+        height: 100%;
+        border-radius: 12px;
+        position: absolute;
+        left: 0;
+        top: 0;
+    }
+    .load-bar-target {
+        position: absolute;
+        height: 100%;
+        border: 2px solid #1e293b;
+        border-radius: 12px;
+        top: 0;
+        pointer-events: none;
+        box-sizing: border-box;
+    }
+    .load-label {
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: #475569;
+        margin-bottom: 2px;
+        display: flex;
+        justify-content: space-between;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -298,7 +332,7 @@ class PhysiologyEngine:
             return {
                 "readiness": "High",
                 "recommendation": "Go Hard / Interval Day",
-                "target_load": "150 - 250 TRIMP",
+                "target_load": "Heavy (e.g., Threshold or 90m+ Long Run)",
                 "message": "Green light. Your system is primed for high intensity.",
                 "color": "#22c55e" # Green
             }
@@ -307,7 +341,7 @@ class PhysiologyEngine:
             return {
                 "readiness": "Low",
                 "recommendation": "Active Recovery / Rest",
-                "target_load": "0 - 40 TRIMP",
+                "target_load": "Recovery (e.g., 30m easy jog or Rest)",
                 "message": "Red light. Focus on sleep and mobility today.",
                 "color": "#ef4444" # Red
             }
@@ -316,7 +350,7 @@ class PhysiologyEngine:
             return {
                 "readiness": "Moderate",
                 "recommendation": "Steady State / Base Miles",
-                "target_load": "80 - 150 TRIMP",
+                "target_load": "Maintenance (e.g., 45-60m Aerobic Z2)",
                 "message": "Train, but keep it controlled. Don't dig a hole.",
                 "color": "#f97316" # Orange
             }
@@ -349,7 +383,7 @@ class PhysiologyEngine:
     def calculate_training_status(self, activity_history):
         """
         Calculates Acute:Chronic Workload Ratio (ACWR) and Status.
-        activity_history: list of dicts with {'date': 'YYYY-MM-DD', 'load': float}
+        activity_history: list of dicts with {'date': 'YYYY-MM-DD', 'load': float, 'focus_type': str}
         """
         today = datetime.now().date()
         
@@ -364,20 +398,22 @@ class PhysiologyEngine:
         for activity in activity_history:
             act_date = datetime.strptime(activity['date'], '%Y-%m-%d').date()
             load = activity.get('load', 0)
-            focus = activity.get('focus', {})
+            focus = activity.get('focus', {}) # This is now {type: total_load, others: 0}
             
             if acute_start <= act_date <= today:
                 acute_load += load
                 
             if chronic_start <= act_date <= today:
                 chronic_load_total += load
-                bucket_totals['low'] += focus.get('low', 0)
-                bucket_totals['high'] += focus.get('high', 0)
-                bucket_totals['anaerobic'] += focus.get('anaerobic', 0)
+                # Accumulate buckets based on the focus dict
+                buckets['low'] += focus.get('low', 0)
+                buckets['high'] += focus.get('high', 0)
+                buckets['anaerobic'] += focus.get('anaerobic', 0)
         
         chronic_load_weekly = chronic_load_total / 4.0 if chronic_load_total > 0 else 1.0
         ratio = acute_load / chronic_load_weekly
         
+        # Status Logic
         status = "Recovery"
         color_class = "status-gray"
         description = "Load is very low."
@@ -403,6 +439,25 @@ class PhysiologyEngine:
             status = "Recovery / Detraining"
             color_class = "status-gray"
             description = "Workload is decreasing."
+            
+        # Optimal Target Ranges (80/20 model approx)
+        total_chronic = chronic_load_total
+        targets = {
+            'low': {'min': total_chronic * 0.70, 'max': total_chronic * 0.90},
+            'high': {'min': total_chronic * 0.10, 'max': total_chronic * 0.25}, # widened slightly for flexibility
+            'anaerobic': {'min': total_chronic * 0.0, 'max': total_chronic * 0.10}
+        }
+        
+        # Determine Shortages
+        feedback = "Balanced! Well done."
+        if buckets['low'] < targets['low']['min']:
+            feedback = "Shortage: Low Aerobic. You need more easy base miles."
+        elif buckets['high'] < targets['high']['min']:
+             feedback = "Shortage: High Aerobic. Try a Tempo or Threshold run."
+        elif buckets['anaerobic'] < targets['anaerobic']['min'] and total_chronic > 500: # Only suggest anaerobic if base exists
+             feedback = "Shortage: Anaerobic. Try some sprints or hill repeats."
+        elif buckets['low'] > targets['low']['max']:
+             feedback = "Focus: High Volume of Easy work detected."
 
         return {
             "acute": round(acute_load),
@@ -411,7 +466,10 @@ class PhysiologyEngine:
             "status": status,
             "css": color_class,
             "desc": description,
-            "buckets": bucket_totals
+            "buckets": buckets,
+            "targets": targets,
+            "feedback": feedback,
+            "total_4w": total_chronic
         }
 
 # --- Data Persistence Helper ---
@@ -507,6 +565,13 @@ def format_duration(decimal_min):
         return f"{hrs:02d}:{rem_mins:02d}:{secs:02d}"
     return f"{rem_mins:02d}:{secs:02d}"
 
+def format_sleep(decimal_hours):
+    """Converts decimal hours (e.g. 6.83) to '6h 50m' string"""
+    if not decimal_hours: return "-"
+    hrs = int(decimal_hours)
+    mins = int((decimal_hours - hrs) * 60)
+    return f"{hrs}h {mins}m"
+
 def parse_time_input(time_str):
     try:
         clean = time_str.strip()
@@ -518,7 +583,14 @@ def parse_time_input(time_str):
         return 0.0
     except:
         return 0.0
-        
+
+def float_to_hhmm(val):
+    """Converts decimal hours 7.5 to string '07:30' for prefilling text inputs"""
+    if not val: return ""
+    hours = int(val)
+    minutes = int((val - hours) * 60)
+    return f"{hours:02d}:{minutes:02d}"
+
 def scroll_to_top():
     """Injects JS to scroll to top of page"""
     js = """
@@ -561,7 +633,9 @@ def generate_report(start_date, end_date, selected_cats):
             for r in period_runs:
                 # Calculate Physio metrics on fly for report
                 zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
-                trimp, _ = engine.calculate_trimp(float(r['duration']), int(r['avgHr']), zones)
+                trimp, focus = engine.calculate_trimp(float(r['duration']), int(r['avgHr']), zones)
+                # Find focus type key where val > 0 or default
+                focus_type = next((k for k, v in focus.items() if v > 0), "low")
                 te, te_label = engine.get_training_effect(trimp)
                 
                 line = f"- {r['date'][5:]}: {r['type']} {r['distance']}km @ {format_duration(r['duration'])}"
@@ -576,7 +650,7 @@ def generate_report(start_date, end_date, selected_cats):
                 report.append(line)
                 
                 # Physio & Feel
-                physio_info = f"   Load: {int(trimp)} (TE: {te} {te_label})"
+                physio_info = f"   Load: {int(trimp)} ({focus_type.title()}) | TE: {te} {te_label}"
                 if r.get('rpe'): physio_info += f" | RPE: {r['rpe']}"
                 if r.get('feel'): physio_info += f" | Feel: {r['feel']}"
                 report.append(physio_info)
@@ -602,14 +676,23 @@ def generate_report(start_date, end_date, selected_cats):
     if "Stats" in selected_cats:
         stats = st.session_state.data['health_logs']
         period_stats = [s for s in stats if start_date <= datetime.strptime(s['date'], '%Y-%m-%d').date() <= end_date]
+        period_stats.sort(key=lambda x: x['date']) # Sort chronologically
         
         if period_stats:
-            avg_rhr = sum(s['rhr'] for s in period_stats) / len(period_stats)
-            avg_hrv = sum(s['hrv'] for s in period_stats) / len(period_stats)
-            avg_sleep = sum(s['sleepHours'] for s in period_stats) / len(period_stats)
+            report.append(f"❤️ **HEALTH LOG**")
             
-            report.append(f"❤️ **HEALTH (Avg)**")
-            report.append(f"Sleep: {avg_sleep:.1f}h | HRV: {int(avg_hrv)}ms | RHR: {int(avg_rhr)}bpm")
+            for s in period_stats:
+                date_str = s['date'][5:]
+                rhr = s.get('rhr', 0)
+                hrv = s.get('hrv', 0)
+                sleep_dec = s.get('sleepHours', 0)
+                sleep_str = format_sleep(sleep_dec)
+                
+                # Determine readiness for this day based on CURRENT profile baseline
+                daily_target = engine.get_daily_target(rhr)
+                readiness = daily_target['readiness']
+                
+                report.append(f"- {date_str}: Sleep: {sleep_str} | HRV: {hrv} | RHR: {rhr} | Readiness: {readiness}")
             report.append("")
 
     # 4. TRAINING STATUS SNAPSHOT (Based on End Date)
@@ -707,32 +790,67 @@ if selected_tab == "Training Status":
     # 1. Morning Check-in (Top)
     with st.container(border=True):
         st.subheader("☀️ Morning Update")
-        with st.form("daily_health"):
-            h_date = st.date_input("Date", datetime.now())
-            c1, c2 = st.columns(2)
-            rhr = c1.number_input("Resting HR", min_value=30, max_value=150, value=60)
-            hrv = c2.number_input("HRV (ms)", min_value=0, value=40)
-            sleep = st.slider("Sleep Hours", 0.0, 12.0, 7.0, 0.5)
-            if st.form_submit_button("Log Morning Stats"):
-                new_h = {"id": int(time.time()), "date": str(h_date), "rhr": rhr, "hrv": hrv, "sleepHours": sleep, "vo2Max": 0} 
-                st.session_state.data['health_logs'].insert(0, new_h)
+        
+        # Date picker OUTSIDE the form for dynamic pre-fill
+        h_date = st.date_input("Log Date", datetime.now(), label_visibility="collapsed")
+        
+        # Check existing log
+        existing_log = next((log for log in st.session_state.data['health_logs'] if log['date'] == str(h_date)), None)
+        
+        # Defaults
+        def_rhr = existing_log['rhr'] if existing_log else 60
+        def_hrv = existing_log['hrv'] if existing_log else 40
+        def_sleep_str = float_to_hhmm(existing_log['sleepHours']) if existing_log else "07:30"
+        
+        with st.form("daily_health", clear_on_submit=False):
+            c_sleep, c_rhr, c_hrv, c_btn = st.columns(4)
+            
+            sleep_str = c_sleep.text_input("Sleep (hh:mm)", value=def_sleep_str, placeholder="07:30")
+            rhr = c_rhr.number_input("RHR", min_value=30, max_value=150, value=int(def_rhr))
+            hrv = c_hrv.number_input("HRV", min_value=0, value=int(def_hrv))
+            
+            btn_label = "Update" if existing_log else "Log"
+            
+            # Spacer for vertical alignment
+            c_btn.write("") 
+            c_btn.write("")
+            
+            if c_btn.form_submit_button(btn_label, use_container_width=True):
+                # Parse sleep time
+                sleep_dec = parse_time_input(sleep_str)
+                
+                new_h = {"id": existing_log['id'] if existing_log else int(time.time()), 
+                         "date": str(h_date), "rhr": rhr, "hrv": hrv, "sleepHours": sleep_dec, "vo2Max": 0}
+                
+                if existing_log:
+                    # Update in place
+                    idx = next((i for i, h in enumerate(st.session_state.data['health_logs']) if h['id'] == existing_log['id']), -1)
+                    if idx != -1: st.session_state.data['health_logs'][idx] = new_h
+                    st.success("Updated!")
+                else:
+                    # Insert new
+                    st.session_state.data['health_logs'].insert(0, new_h)
+                    st.success("Logged!")
+                
                 persist()
-                st.success("Logged!")
                 st.rerun()
     
-        # Readiness Indicator
-        if st.session_state.data['health_logs']:
-            last_log = st.session_state.data['health_logs'][0]
-            engine = PhysiologyEngine(st.session_state.data['user_profile'])
+        # Readiness Indicator using Month Avg from Profile
+        # We grab the log for the SELECTED date to show status
+        display_log = existing_log if existing_log else (st.session_state.data['health_logs'][0] if st.session_state.data['health_logs'] else None)
+        
+        if display_log:
+            prof = st.session_state.data['user_profile']
+            base_rhr = prof.get('monthAvgRHR', 60)
             
-            # Daily Target Logic
-            target_data = engine.get_daily_target(last_log['rhr'])
+            engine = PhysiologyEngine(st.session_state.data['user_profile'])
+            target_data = engine.get_daily_target(display_log['rhr'])
             
             st.markdown(f"""
             <div class="daily-target" style="border-left: 6px solid {target_data['color']};">
                 <div class="target-header">
                     <span style="color: {target_data['color']};">{target_data['readiness']} Readiness</span>
-                    <span style="font-weight:400; color:#64748b; font-size:0.9rem;">• RHR {last_log['rhr']}</span>
+                    <span style="font-weight:400; color:#64748b; font-size:0.9rem;">• RHR {display_log['rhr']} (Base {base_rhr})</span>
                 </div>
                 <div style="font-size: 1.2rem; font-weight:700; color:#1e293b;">{target_data['recommendation']}</div>
                 <div class="target-load">Target: {target_data['target_load']}</div>
@@ -748,9 +866,11 @@ if selected_tab == "Training Status":
     runs = st.session_state.data['runs']
     for r in runs:
         zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
-        trimp, focus_score = engine.calculate_trimp(duration_min=float(r['duration']), avg_hr=int(r['avgHr']), zones=zones)
-        te, te_label = engine.get_training_effect(trimp)
-        history_data.append({'date': r['date'], 'load': trimp, 'te': te, 'te_lbl': te_label, 'type': r['type'], 'focus': focus_score})
+        trimp, focus = engine.calculate_trimp(float(r['duration']), int(r['avgHr']), zones)
+        # Find focus type key where val > 0 or default
+        focus_type = next((k for k, v in focus.items() if v > 0), "low")
+        history_data.append({'date': r['date'], 'load': trimp, 'focus': focus})
+    
     status_data = engine.calculate_training_status(history_data)
     
     with st.container(border=True):
@@ -758,6 +878,7 @@ if selected_tab == "Training Status":
         sc1, sc2 = st.columns([3, 2])
         with sc1:
             st.markdown(f"""<div style="background-color: {status_data['css'] == 'status-green' and '#dcfce7' or status_data['css'] == 'status-red' and '#fee2e2' or status_data['css'] == 'status-orange' and '#ffedd5' or '#f1f5f9'}; padding: 1rem; border-radius: 12px; border: 1px solid #e2e8f0;"><h2 style="margin:0; color: #0f172a;">{status_data['status']}</h2><p style="margin:5px 0 0 0; color: #475569;">{status_data['desc']}</p></div>""", unsafe_allow_html=True)
+            st.markdown(f"<div style='margin-top:10px; font-weight:500; color:#4b5563;'>{status_data['feedback']}</div>", unsafe_allow_html=True)
         with sc2:
             ratio_val = status_data['ratio']
             st.metric("Acute:Chronic Ratio", ratio_val, delta=None)
@@ -1009,7 +1130,9 @@ elif selected_tab == "Cardio Training":
                 for idx, row in filtered_df.iterrows():
                     # Calculate Metrics On-The-Fly for Display
                     zones = [float(row.get(f'z{i}', 0)) for i in range(1,6)]
-                    trimp, _ = engine.calculate_trimp(float(row['duration']), int(row['avgHr']), zones)
+                    trimp, focus = engine.calculate_trimp(float(row['duration']), int(row['avgHr']), zones)
+                    # Find focus type key where val > 0 or default
+                    focus_type = next((k for k, v in focus.items() if v > 0), "low")
                     te, te_label = engine.get_training_effect(trimp)
                     
                     with st.container(border=True):
