@@ -525,7 +525,14 @@ def parse_time_input(time_str):
         return 0.0
     except:
         return 0.0
-        
+
+def float_to_hhmm(val):
+    """Converts decimal hours 7.5 to string '07:30' for prefilling text inputs"""
+    if not val: return ""
+    hours = int(val)
+    minutes = int((val - hours) * 60)
+    return f"{hours:02d}:{minutes:02d}"
+
 def scroll_to_top():
     """Injects JS to scroll to top of page"""
     js = """
@@ -622,7 +629,6 @@ def generate_report(start_date, end_date, selected_cats):
                 sleep_str = format_sleep(sleep_dec)
                 
                 # Determine readiness for this day based on CURRENT profile baseline
-                # Note: Ideally we should store baseline at time of log, but for this app we use current
                 daily_target = engine.get_daily_target(rhr)
                 readiness = daily_target['readiness']
                 
@@ -724,37 +730,67 @@ if selected_tab == "Training Status":
     # 1. Morning Check-in (Top)
     with st.container(border=True):
         st.subheader("☀️ Morning Update")
-        with st.form("daily_health", clear_on_submit=True): # Added clear_on_submit for streamlining
-            c_date, c_sleep, c_rhr, c_hrv = st.columns(4)
-            h_date = c_date.date_input("Date", datetime.now())
-            # Changed to text input for time format
-            sleep_str = c_sleep.text_input("Sleep (hh:mm)", value="", placeholder="07:30")
-            rhr = c_rhr.number_input("RHR", min_value=30, max_value=150, value=60)
-            hrv = c_hrv.number_input("HRV", min_value=0, value=40)
+        
+        # Date picker OUTSIDE the form for dynamic pre-fill
+        h_date = st.date_input("Log Date", datetime.now(), label_visibility="collapsed")
+        
+        # Check existing log
+        existing_log = next((log for log in st.session_state.data['health_logs'] if log['date'] == str(h_date)), None)
+        
+        # Defaults
+        def_rhr = existing_log['rhr'] if existing_log else 60
+        def_hrv = existing_log['hrv'] if existing_log else 40
+        def_sleep_str = float_to_hhmm(existing_log['sleepHours']) if existing_log else "07:30"
+        
+        with st.form("daily_health", clear_on_submit=False):
+            c_sleep, c_rhr, c_hrv, c_btn = st.columns(4)
             
-            if st.form_submit_button("Log Stats", use_container_width=True):
-                # Parse sleep time to decimal hours for storage
+            sleep_str = c_sleep.text_input("Sleep (hh:mm)", value=def_sleep_str, placeholder="07:30")
+            rhr = c_rhr.number_input("RHR", min_value=30, max_value=150, value=int(def_rhr))
+            hrv = c_hrv.number_input("HRV", min_value=0, value=int(def_hrv))
+            
+            btn_label = "Update" if existing_log else "Log"
+            
+            # Spacer for vertical alignment
+            c_btn.write("") 
+            c_btn.write("")
+            
+            if c_btn.form_submit_button(btn_label, use_container_width=True):
+                # Parse sleep time
                 sleep_dec = parse_time_input(sleep_str)
                 
-                new_h = {"id": int(time.time()), "date": str(h_date), "rhr": rhr, "hrv": hrv, "sleepHours": sleep_dec, "vo2Max": 0} 
-                st.session_state.data['health_logs'].insert(0, new_h)
+                new_h = {"id": existing_log['id'] if existing_log else int(time.time()), 
+                         "date": str(h_date), "rhr": rhr, "hrv": hrv, "sleepHours": sleep_dec, "vo2Max": 0}
+                
+                if existing_log:
+                    # Update in place
+                    idx = next((i for i, h in enumerate(st.session_state.data['health_logs']) if h['id'] == existing_log['id']), -1)
+                    if idx != -1: st.session_state.data['health_logs'][idx] = new_h
+                    st.success("Updated!")
+                else:
+                    # Insert new
+                    st.session_state.data['health_logs'].insert(0, new_h)
+                    st.success("Logged!")
+                
                 persist()
-                st.success("Logged!")
                 st.rerun()
     
         # Readiness Indicator using Month Avg from Profile
-        if st.session_state.data['health_logs']:
-            last_log = st.session_state.data['health_logs'][0]
-            engine = PhysiologyEngine(st.session_state.data['user_profile'])
+        # We grab the log for the SELECTED date to show status
+        display_log = existing_log if existing_log else (st.session_state.data['health_logs'][0] if st.session_state.data['health_logs'] else None)
+        
+        if display_log:
+            prof = st.session_state.data['user_profile']
+            base_rhr = prof.get('monthAvgRHR', 60)
             
-            # Daily Target Logic
-            target_data = engine.get_daily_target(last_log['rhr'])
+            engine = PhysiologyEngine(st.session_state.data['user_profile'])
+            target_data = engine.get_daily_target(display_log['rhr'])
             
             st.markdown(f"""
             <div class="daily-target" style="border-left: 6px solid {target_data['color']};">
                 <div class="target-header">
                     <span style="color: {target_data['color']};">{target_data['readiness']} Readiness</span>
-                    <span style="font-weight:400; color:#64748b; font-size:0.9rem;">• RHR {last_log['rhr']}</span>
+                    <span style="font-weight:400; color:#64748b; font-size:0.9rem;">• RHR {display_log['rhr']} (Base {base_rhr})</span>
                 </div>
                 <div style="font-size: 1.2rem; font-weight:700; color:#1e293b;">{target_data['recommendation']}</div>
                 <div class="target-load">Target: {target_data['target_load']}</div>
