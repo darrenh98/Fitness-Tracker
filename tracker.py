@@ -263,41 +263,10 @@ class PhysiologyEngine:
         self.gender = user_profile.get('gender', 'Male').lower()
         self.zones = user_profile.get('zones', {})
 
-    def classify_activity_load(self, load, avg_hr, zones):
-        """
-        Classifies a session's load into Anaerobic, High Aerobic, or Low Aerobic.
-        Rules:
-        - Anaerobic: Time in Z5 > 5 mins OR Avg HR > Z4 threshold
-        - High Aerobic: Time in Z4 > 10 mins AND Not Anaerobic
-        - Low Aerobic: Everything else
-        """
-        # Get thresholds
-        z4_upper = float(self.zones.get('z4_u', 175))
-        z4_lower = float(self.zones.get('z4_l', 161))
-        
-        # Zones list is [z1, z2, z3, z4, z5] in minutes
-        time_z5 = zones[4] if len(zones) > 4 else 0
-        time_z4 = zones[3] if len(zones) > 3 else 0
-        
-        # Anaerobic Check
-        if time_z5 > 5 or (avg_hr > z4_upper):
-            return "anaerobic"
-        
-        # High Aerobic Check
-        if time_z4 > 10:
-            return "high"
-            
-        # Default to Low Aerobic
-        return "low"
-
     def calculate_trimp(self, duration_min, avg_hr=None, zones=None):
         """
         Calculates Training Impulse (TRIMP) using Banister's formula.
-        Uses explicit zone boundaries if available.
-        
-        RETURNS: (total_load, focus_scores_dict)
-        Note: focus_scores dict now puts the ENTIRE load into ONE bucket 
-        (Anaerobic, High, or Low) based on the classification of the activity.
+        Splits load into buckets based on zone intensity.
         """
         load = 0.0
         focus_scores = {'low': 0, 'high': 0, 'anaerobic': 0}
@@ -318,20 +287,30 @@ class PhysiologyEngine:
                 avg_zone_hr = midpoints[i]
                 hr_reserve = max(0.0, min(1.0, (avg_zone_hr - self.hr_rest) / (self.hr_max - self.hr_rest)))
                 segment_load = duration * hr_reserve * 0.64 * math.exp(exponent * hr_reserve)
+                
                 load += segment_load
+                
+                # Classify Focus - Split logic
+                if i <= 1: # Z1, Z2
+                    focus_scores['low'] += segment_load
+                elif i <= 3: # Z3, Z4
+                    focus_scores['high'] += segment_load
+                else: # Z5
+                    focus_scores['anaerobic'] += segment_load
                 
         elif avg_hr and avg_hr > 0:
             # Basic Banister
             hr_reserve = max(0.0, min(1.0, (avg_hr - self.hr_rest) / (self.hr_max - self.hr_rest)))
             exponent = 1.92 if self.gender == 'male' else 1.67
             load = duration_min * hr_reserve * 0.64 * math.exp(exponent * hr_reserve)
-
-        # --- CLASSIFICATION STEP (Restored Whole Activity Logic) ---
-        # Determine the single focus type for the entire activity
-        focus_type = self.classify_activity_load(load, avg_hr if avg_hr else 0, zones if zones else [0,0,0,0,0])
-        
-        # Assign the FULL load to that single bucket
-        focus_scores[focus_type] = load
+            
+            # Estimate focus based on Avg HR against Zone 2/4 boundaries
+            z2_upper = float(self.zones.get('z2_u', 145))
+            z4_upper = float(self.zones.get('z4_u', 175))
+            
+            if avg_hr > z4_upper: focus_scores['anaerobic'] = load
+            elif avg_hr > z2_upper: focus_scores['high'] = load
+            else: focus_scores['low'] = load
             
         return load, focus_scores
 
@@ -649,8 +628,8 @@ def generate_report(start_date, end_date, selected_cats):
                 # Calculate Physio metrics on fly for report
                 zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
                 trimp, focus = engine.calculate_trimp(float(r['duration']), int(r['avgHr']), zones)
-                # Find focus type key where val > 0 or default
-                focus_type = next((k for k, v in focus.items() if v > 0), "low")
+                # Find dominant focus type
+                focus_type = max(focus, key=focus.get) if focus else "low"
                 te, te_label = engine.get_training_effect(trimp)
                 
                 line = f"- {r['date'][5:]}: {r['type']} {r['distance']}km @ {format_duration(r['duration'])}"
@@ -1144,7 +1123,9 @@ elif selected_tab == "Cardio Training":
                 for idx, row in filtered_df.iterrows():
                     # Calculate Metrics On-The-Fly for Display
                     zones = [float(row.get(f'z{i}', 0)) for i in range(1,6)]
-                    trimp, _ = engine.calculate_trimp(float(row['duration']), int(row['avgHr']), zones)
+                    trimp, focus = engine.calculate_trimp(float(row['duration']), int(row['avgHr']), zones)
+                    # Find focus type key where val > 0 or default
+                    focus_type = next((k for k, v in focus.items() if v > 0), "low")
                     te, te_label = engine.get_training_effect(trimp)
                     
                     with st.container(border=True):
