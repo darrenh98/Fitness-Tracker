@@ -783,51 +783,85 @@ if selected_tab == "Training Status":
     
     # 1. Morning Check-in (Top)
     with st.container(border=True):
-        st.subheader("☀️ Morning Update")
+        c_header, c_date = st.columns([3, 2])
+        c_header.subheader("☀️ Morning Update")
         
-        # Date picker OUTSIDE the form for dynamic pre-fill
-        h_date = st.date_input("Log Date", datetime.now(), label_visibility="collapsed")
+        # Date picker
+        h_date = c_date.date_input("Log Date", datetime.now(), label_visibility="collapsed")
         
         # Check existing log
         existing_log = next((log for log in st.session_state.data['health_logs'] if log['date'] == str(h_date)), None)
         
-        # Defaults
-        def_rhr = existing_log['rhr'] if existing_log else 60
-        def_hrv = existing_log['hrv'] if existing_log else 40
-        def_sleep_str = float_to_hhmm(existing_log['sleepHours']) if existing_log else "07:30"
+        # State management for editing
+        if 'edit_morning_date' not in st.session_state:
+            st.session_state.edit_morning_date = None
+            
+        # Are we editing this specific date?
+        is_editing = (st.session_state.edit_morning_date == str(h_date))
         
-        with st.form("daily_health", clear_on_submit=False):
-            c_sleep, c_rhr, c_hrv, c_btn = st.columns(4)
+        # VIEW MODE: Log exists and we are NOT editing
+        if existing_log and not is_editing:
+            v1, v2, v3, v4 = st.columns(4)
+            v1.metric("Sleep", format_sleep(existing_log['sleepHours']))
+            v2.metric("RHR", f"{existing_log['rhr']} bpm")
+            v3.metric("HRV", f"{existing_log['hrv']} ms")
             
-            sleep_str = c_sleep.text_input("Sleep (hh:mm)", value=def_sleep_str, placeholder="07:30")
-            rhr = c_rhr.number_input("RHR", min_value=30, max_value=150, value=int(def_rhr))
-            hrv = c_hrv.number_input("HRV", min_value=0, value=int(def_hrv))
+            with v4:
+                st.write("") # Spacer
+                col_e, col_d = st.columns(2)
+                if col_e.button("✏️", key=f"edit_m_{existing_log['id']}"):
+                    st.session_state.edit_morning_date = str(h_date)
+                    st.rerun()
+                if col_d.button("🗑️", key=f"del_m_{existing_log['id']}"):
+                    st.session_state.data['health_logs'] = [h for h in st.session_state.data['health_logs'] if h['id'] != existing_log['id']]
+                    persist()
+                    st.rerun()
+                    
+        # EDIT/ADD MODE: No log OR we are editing
+        else:
+            # Defaults
+            def_rhr = existing_log['rhr'] if existing_log else 60
+            def_hrv = existing_log['hrv'] if existing_log else 40
+            def_sleep_str = float_to_hhmm(existing_log['sleepHours']) if existing_log else "07:30"
             
-            btn_label = "Update" if existing_log else "Log"
-            
-            # Spacer for vertical alignment
-            c_btn.write("") 
-            c_btn.write("")
-            
-            if c_btn.form_submit_button(btn_label, use_container_width=True):
-                # Parse sleep time
-                sleep_dec = parse_time_input(sleep_str)
+            with st.form("daily_health", clear_on_submit=False):
+                c_sleep, c_rhr, c_hrv, c_btn = st.columns(4)
                 
-                new_h = {"id": existing_log['id'] if existing_log else int(time.time()), 
-                         "date": str(h_date), "rhr": rhr, "hrv": hrv, "sleepHours": sleep_dec, "vo2Max": 0}
+                sleep_str = c_sleep.text_input("Sleep (hh:mm)", value=def_sleep_str, placeholder="07:30")
+                rhr = c_rhr.number_input("RHR", min_value=30, max_value=150, value=int(def_rhr))
+                hrv = c_hrv.number_input("HRV", min_value=0, value=int(def_hrv))
                 
-                if existing_log:
-                    # Update in place
-                    idx = next((i for i, h in enumerate(st.session_state.data['health_logs']) if h['id'] == existing_log['id']), -1)
-                    if idx != -1: st.session_state.data['health_logs'][idx] = new_h
-                    st.success("Updated!")
-                else:
-                    # Insert new
-                    st.session_state.data['health_logs'].insert(0, new_h)
-                    st.success("Logged!")
+                btn_label = "Update Stats" if existing_log else "Log Stats"
                 
-                persist()
-                st.rerun()
+                # Spacer for vertical alignment
+                c_btn.write("") 
+                c_btn.write("")
+                
+                if c_btn.form_submit_button(btn_label, use_container_width=True):
+                    # Parse sleep time
+                    sleep_dec = parse_time_input(sleep_str)
+                    
+                    new_h = {"id": existing_log['id'] if existing_log else int(time.time()), 
+                             "date": str(h_date), "rhr": rhr, "hrv": hrv, "sleepHours": sleep_dec, "vo2Max": 0}
+                    
+                    if existing_log:
+                        # Update in place
+                        idx = next((i for i, h in enumerate(st.session_state.data['health_logs']) if h['id'] == existing_log['id']), -1)
+                        if idx != -1: st.session_state.data['health_logs'][idx] = new_h
+                        st.session_state.edit_morning_date = None # Exit edit mode
+                        st.success("Updated!")
+                    else:
+                        # Insert new
+                        st.session_state.data['health_logs'].insert(0, new_h)
+                        st.success("Logged!")
+                    
+                    persist()
+                    st.rerun()
+            
+            if is_editing:
+                if st.button("Cancel Edit"):
+                    st.session_state.edit_morning_date = None
+                    st.rerun()
     
         # Readiness Indicator using Month Avg from Profile
         # We grab the log for the SELECTED date to show status
@@ -860,9 +894,9 @@ if selected_tab == "Training Status":
     runs = st.session_state.data['runs']
     for r in runs:
         zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
-        trimp, focus_score = engine.calculate_trimp(duration_min=float(r['duration']), avg_hr=int(r['avgHr']), zones=zones)
+        trimp, focus = engine.calculate_trimp(float(r['duration']), int(r['avgHr']), zones)
         te, te_label = engine.get_training_effect(trimp)
-        history_data.append({'date': r['date'], 'load': trimp, 'te': te, 'te_lbl': te_label, 'type': r['type'], 'focus': focus_score})
+        history_data.append({'date': r['date'], 'load': trimp, 'te': te, 'te_lbl': te_label, 'type': r['type'], 'focus': focus})
     status_data = engine.calculate_training_status(history_data)
     
     with st.container(border=True):
