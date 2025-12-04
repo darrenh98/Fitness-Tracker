@@ -208,72 +208,85 @@ class PhysiologyEngine:
     def calculate_trimp(self, duration_min, avg_hr=None, zones=None):
         """
         Calculates Training Impulse (TRIMP) using Banister's formula.
-        Fallback to Zone-based load if Avg HR is missing.
+        Also returns a classification tuple (load, 'Low'/'High'/'Anaerobic')
         """
-        if avg_hr and avg_hr > 0:
-            # Banister's Impulse Response
-            hr_reserve = (avg_hr - self.hr_rest) / (self.hr_max - self.hr_rest)
-            # Clamp reserve between 0 and 1 for safety
-            hr_reserve = max(0.0, min(1.0, hr_reserve))
+        load = 0.0
+        focus_scores = {'low': 0, 'high': 0, 'anaerobic': 0}
+
+        if zones and len(self.zones) == 5:
+            # Granular Calculation per Zone
+            prev_limit = self.hr_rest 
+            zone_keys = ['z1', 'z2', 'z3', 'z4', 'z5']
             
+            for i, duration in enumerate(zones):
+                if duration <= 0: continue
+                
+                key = zone_keys[i]
+                upper = float(self.zones.get(key, 0))
+                if upper == 0: continue 
+                
+                avg_zone_hr = (prev_limit + upper) / 2
+                
+                # Calculate Load for this segment
+                hr_reserve = max(0.0, min(1.0, (avg_zone_hr - self.hr_rest) / (self.hr_max - self.hr_rest)))
+                exponent = 1.92 if self.gender == 'male' else 1.67
+                segment_load = duration * hr_reserve * 0.64 * math.exp(exponent * hr_reserve)
+                
+                load += segment_load
+                
+                # Classify Focus
+                if i <= 1: # Z1, Z2
+                    focus_scores['low'] += segment_load
+                elif i <= 3: # Z3, Z4
+                    focus_scores['high'] += segment_load
+                else: # Z5
+                    focus_scores['anaerobic'] += segment_load
+                    
+                prev_limit = upper
+                
+        elif avg_hr and avg_hr > 0:
+            # Basic Banister (No Focus available accurately without zones)
+            hr_reserve = max(0.0, min(1.0, (avg_hr - self.hr_rest) / (self.hr_max - self.hr_rest)))
             exponent = 1.92 if self.gender == 'male' else 1.67
-            trimp = duration_min * hr_reserve * 0.64 * math.exp(exponent * hr_reserve)
-            return trimp
-        
-        elif zones:
-            # If user has defined accurate zone boundaries, use them for granular Banister calc
-            # Otherwise fallback to static multipliers
-            if self.zones and len(self.zones) == 5:
-                total_trimp = 0
-                # Assume Z1 starts at HR Rest. 
-                # We iterate through zones Z1 to Z5
-                prev_limit = self.hr_rest 
-                zone_keys = ['z1', 'z2', 'z3', 'z4', 'z5']
-                
-                for i, duration in enumerate(zones):
-                    if duration <= 0: continue
-                    
-                    key = zone_keys[i]
-                    upper = float(self.zones.get(key, 0))
-                    if upper == 0: continue 
-                    
-                    # Calculate Representative HR for this zone (Midpoint)
-                    avg_zone_hr = (prev_limit + upper) / 2
-                    
-                    # Calculate HR Reserve for this specific zone midpoint
-                    hr_reserve = (avg_zone_hr - self.hr_rest) / (self.hr_max - self.hr_rest)
-                    hr_reserve = max(0.0, min(1.0, hr_reserve))
-                    
-                    exponent = 1.92 if self.gender == 'male' else 1.67
-                    
-                    # Calculate Load for this segment
-                    segment_load = duration * hr_reserve * 0.64 * math.exp(exponent * hr_reserve)
-                    total_trimp += segment_load
-                    
-                    # Set lower bound for next zone
-                    prev_limit = upper
-                
-                return total_trimp
-            else:
-                # Fallback: Zone Multipliers (Standard approximations)
-                # Zones input expected as list of minutes [z1, z2, z3, z4, z5]
-                multipliers = [0.8, 1.5, 2.8, 4.5, 7.0]
-                load = sum(z * m for z, m in zip(zones, multipliers))
-                return load
-        
-        return 0.0
+            load = duration_min * hr_reserve * 0.64 * math.exp(exponent * hr_reserve)
+            
+            # Rough estimate for focus based on Avg HR vs Zones
+            # If Avg HR is Z5 -> Anaerobic, Z3/4 -> High, else Low
+            # This is imprecise but a fallback
+            z2_lim = float(self.zones.get('z2', 145))
+            z4_lim = float(self.zones.get('z4', 175))
+            
+            if avg_hr > z4_lim: focus_scores['anaerobic'] = load
+            elif avg_hr > z2_lim: focus_scores['high'] = load
+            else: focus_scores['low'] = load
+            
+        return load, focus_scores
 
     def get_training_effect(self, trimp_score):
         """
         Scales raw TRIMP to a 0.0-5.0 Training Effect score based on VO2 Max.
+        Returns (score, label)
         """
-        # Scaling factor: Higher VO2 max needs more load to get same effect
-        # Using approximation: scaling ~ vo2_max * 1.5
         scaling_factor = self.vo2_max * 1.5
-        if scaling_factor == 0: return 0.0
+        if scaling_factor == 0: return 0.0, "None"
         
         te = trimp_score / scaling_factor
-        return round(min(5.0, te), 1)
+        te = round(min(5.0, te), 1)
+        
+        label = "Recovery"
+        if te >= 1.0 and te < 2.0: label = "Maintaining"
+        elif te >= 2.0 and te < 3.0: label = "Maintaining/Building"
+        elif te >= 3.0 and te < 4.0: label = "Improving"
+        elif te >= 4.0 and te < 5.0: label = "Highly Improving"
+        elif te >= 5.0: label = "Overreaching"
+            
+        return te, label
+
+    def get_trimp_label(self, trimp):
+        if trimp < 50: return "Light"
+        if trimp < 100: return "Moderate"
+        if trimp < 200: return "Hard"
+        return "Extreme"
 
     def calculate_training_status(self, activity_history):
         """
@@ -282,55 +295,57 @@ class PhysiologyEngine:
         """
         today = datetime.now().date()
         
-        # Setup date buckets
         acute_start = today - timedelta(days=6) # Last 7 days
         chronic_start = today - timedelta(days=27) # Last 28 days
         
         acute_load = 0
         chronic_load_total = 0
         
+        # For Buckets (Last 28 days)
+        bucket_totals = {'low': 0, 'high': 0, 'anaerobic': 0}
+        
         for activity in activity_history:
             act_date = datetime.strptime(activity['date'], '%Y-%m-%d').date()
             load = activity.get('load', 0)
+            focus = activity.get('focus', {})
             
             if acute_start <= act_date <= today:
                 acute_load += load
                 
             if chronic_start <= act_date <= today:
                 chronic_load_total += load
+                bucket_totals['low'] += focus.get('low', 0)
+                bucket_totals['high'] += focus.get('high', 0)
+                bucket_totals['anaerobic'] += focus.get('anaerobic', 0)
         
-        # Chronic Load is normalized to a weekly view (Total / 4)
-        chronic_load_weekly = chronic_load_total / 4.0 if chronic_load_total > 0 else 1.0 # Avoid div/0
-        
+        chronic_load_weekly = chronic_load_total / 4.0 if chronic_load_total > 0 else 1.0
         ratio = acute_load / chronic_load_weekly
         
-        # Status Logic
         status = "Recovery"
         color_class = "status-gray"
-        description = "Load is very low. You are detraining or recovering."
+        description = "Load is very low."
 
         if ratio > 1.5:
             status = "Overreaching"
             color_class = "status-red"
-            description = "High injury risk! Workload spike is too high."
+            description = "High injury risk! Spike in load."
         elif 1.3 <= ratio <= 1.5:
             status = "High Strain"
             color_class = "status-orange"
-            description = "Caution: You are increasing load rapidly."
+            description = "Caution: Rapid load increase."
         elif 0.8 <= ratio < 1.3:
             if acute_load > chronic_load_weekly:
                 status = "Productive"
                 color_class = "status-green"
-                description = "Optimal zone. You are building fitness."
+                description = "Optimal zone. Building fitness."
             else:
                 status = "Maintaining"
                 color_class = "status-green"
-                description = "Load is consistent. Fitness is stable."
+                description = "Load is consistent."
         else:
-            # < 0.8
             status = "Recovery / Detraining"
             color_class = "status-gray"
-            description = "Workload is decreasing. Good for taper weeks."
+            description = "Workload is decreasing."
 
         return {
             "acute": round(acute_load),
@@ -338,7 +353,8 @@ class PhysiologyEngine:
             "ratio": round(ratio, 2),
             "status": status,
             "css": color_class,
-            "desc": description
+            "desc": description,
+            "buckets": bucket_totals
         }
 
 # --- Data Persistence Helper ---
@@ -352,11 +368,10 @@ DEFAULT_DATA = {
         {"id": 1, "name": "Leg Day", "exercises": ["Squats", "Split Squats", "Glute Bridges", "Calf Raises"]},
         {"id": 2, "name": "Upper Body", "exercises": ["Bench Press", "Pull Ups", "Overhead Press", "Rows"]}
     ],
-    # Enhanced User Profile Defaults
     "user_profile": {
         "age": 30, "height": 175, "weight": 70, "heightUnit": "cm", "weightUnit": "kg",
         "gender": "Male", "hrMax": 190, "hrRest": 60, "vo2Max": 45,
-        "zones": {"z1": 130, "z2": 145, "z3": 160, "z4": 175, "z5": 190} # Default Upper Limits
+        "zones": {"z1": 130, "z2": 145, "z3": 160, "z4": 175, "z5": 190}
     },
     "cycles": {"macro": "", "meso": "", "micro": ""},
     "weekly_plan": {day: {"am": "", "pm": ""} for day in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']}
@@ -368,12 +383,8 @@ def load_data():
     try:
         with open(DATA_FILE, 'r') as f:
             data = json.load(f)
-            # Migration: Ensure new profile fields exist
             if 'gender' not in data.get('user_profile', {}):
-                data['user_profile']['gender'] = "Male"
-                data['user_profile']['hrMax'] = 190
-                data['user_profile']['hrRest'] = 60
-                data['user_profile']['vo2Max'] = 45
+                data['user_profile'].update({"gender": "Male", "hrMax": 190, "hrRest": 60, "vo2Max": 45})
             if 'zones' not in data.get('user_profile', {}):
                 data['user_profile']['zones'] = {"z1": 130, "z2": 145, "z3": 160, "z4": 175, "z5": 190}
             return data
@@ -502,7 +513,6 @@ def generate_report(start_date, end_date, selected_cats):
             for g in period_gyms:
                 vol = g.get('totalVolume', 0)
                 report.append(f"- {g['date'][5:]}: {g['routineName']} (Vol: {vol:.0f}kg)")
-                # List exercises briefly
                 ex_names = [e['name'] for e in g['exercises']]
                 if ex_names:
                     report.append(f"   Exs: {', '.join(ex_names)}")
@@ -526,7 +536,6 @@ def generate_report(start_date, end_date, selected_cats):
 # --- Sidebar Navigation ---
 with st.sidebar:
     st.title(":material/sprint: RunLog Hub")
-    # Renamed "Stats" to "Physio" to reflect advanced dashboard
     selected_tab = st.radio("Navigate", ["Plan", "Field (Runs)", "Gym", "Physio", "Trends", "Share"], label_visibility="collapsed")
     st.divider()
     
@@ -616,7 +625,7 @@ elif selected_tab == "Field (Runs)":
     def_type = st.session_state.form_act_type
     def_date = datetime.now()
     def_dist = 0.0
-    def_dur = 0.0 # Will render as empty string or "00:00:00"
+    def_dur = 0.0
     def_hr = 0
     def_cad = 0
     def_pwr = 0
@@ -644,40 +653,48 @@ elif selected_tab == "Field (Runs)":
             def_z4 = format_duration(run_data.get('z4', 0))
             def_z5 = format_duration(run_data.get('z5', 0))
             
-            # Scroll to top when editing is activated (and we are rendering the edit form)
             scroll_to_top()
 
     form_label = f":material/edit: Edit Activity" if edit_run_id else ":material/add_circle: Log Activity"
-    # Auto collapse if not editing
     expander_state = True if edit_run_id else False
 
     with st.expander(form_label, expanded=expander_state):
-        # Dynamic key suffix to ensure fresh form state when switching between entries or modes
+        # Only show template loader in "Add" mode
+        if not edit_run_id:
+            templates = st.session_state.data.get('templates', {})
+            if templates:
+                col_t1, col_t2 = st.columns([3, 1])
+                with col_t1:
+                    template_names = ["Select Template..."] + list(templates.keys())
+                    sel_template = st.selectbox(":material/folder_open: Load Template", template_names, label_visibility="collapsed")
+                    if sel_template != "Select Template...":
+                        t_data = templates[sel_template]
+                        def_type = t_data.get('type', "Run")
+                        def_dist = t_data.get('distance', 5.0)
+                        def_dur = t_data.get('duration', 30.0)
+                        def_notes = t_data.get('notes', "")
+                        st.session_state.form_act_type = def_type
+                        st.rerun() 
+
         key_suffix = f"{edit_run_id}" if edit_run_id else "new"
 
-        # Clear on submit resets the form to empty/0 values automatically
         with st.form("run_form", clear_on_submit=True):
-            # Row 1: Date | Type
             c_d, c_t = st.columns([1, 3])
             with c_d:
                 st.caption("Date")
                 act_date = st.date_input("Date", def_date, label_visibility="collapsed", key=f"date_{key_suffix}")
             with c_t:
                 st.caption("Activity Type")
-                # Correctly set index based on def_type (which comes from run_data in Edit mode)
                 type_idx = ["Run", "Walk", "Ultimate"].index(def_type) if def_type in ["Run", "Walk", "Ultimate"] else 0
                 act_type = st.radio("Type", ["Run", "Walk", "Ultimate"], index=type_idx, key=f"type_{key_suffix}", horizontal=True, label_visibility="collapsed")
             
-            # Row 2: Dist | Duration
             c1, c2 = st.columns(2)
             with c1:
                 st.caption("Distance (km)")
-                # Use None for placeholder effect if default is 0.0 and not editing
                 dist_val = float(def_dist) if edit_run_id or def_dist > 0 else None
                 dist = st.number_input("Distance", min_value=0.0, step=0.01, value=dist_val, placeholder="0.00", label_visibility="collapsed", key=f"dist_{key_suffix}")
             with c2:
                 st.caption("Duration (hh:mm:ss)")
-                # If new log, show empty string so placeholder shows "00:30:00"
                 dur_val = format_duration(def_dur) if edit_run_id or def_dur > 0 else ""
                 dur_str = st.text_input("Duration", value=dur_val, placeholder="00:30:00", label_visibility="collapsed", key=f"dur_{key_suffix}")
             
@@ -703,11 +720,9 @@ elif selected_tab == "Field (Runs)":
             z4 = rc4.text_input("Zone 4", value=def_z4, placeholder="00:00", key=f"z4_{key_suffix}")
             z5 = rc5.text_input("Zone 5", value=def_z5, placeholder="00:00", key=f"z5_{key_suffix}")
             
-            c_feel, c_date = st.columns(2)
-            with c_feel:
-                st.caption("How did it feel?")
-                feel_idx = ["Good", "Normal", "Tired", "Pain"].index(def_feel) if def_feel in ["Good", "Normal", "Tired", "Pain"] else 1
-                feel = st.radio("Feel", ["Good", "Normal", "Tired", "Pain"], index=feel_idx, horizontal=True, label_visibility="collapsed", key=f"feel_{key_suffix}")
+            st.caption("How did it feel?")
+            feel_idx = ["Good", "Normal", "Tired", "Pain"].index(def_feel) if def_feel in ["Good", "Normal", "Tired", "Pain"] else 1
+            feel = st.radio("Feel", ["Good", "Normal", "Tired", "Pain"], index=feel_idx, horizontal=True, label_visibility="collapsed", key=f"feel_{key_suffix}")
             
             st.caption("Notes")
             notes = st.text_area("Notes", value=def_notes, placeholder="Easy run, felt strong...", height=3, label_visibility="collapsed", key=f"notes_{key_suffix}")
@@ -716,7 +731,6 @@ elif selected_tab == "Field (Runs)":
             
             if st.form_submit_button(btn_text):
                 new_id = int(time.time() * 1000)
-                # Handle None distance input
                 dist_save = dist if dist is not None else 0.0
                 
                 run_obj = {
@@ -748,57 +762,36 @@ elif selected_tab == "Field (Runs)":
 
     st.markdown("### Dashboard & History")
     
-    # --- NEW DATE CONTROLS ---
     if 'dash_period' not in st.session_state: st.session_state.dash_period = "Weekly"
     if 'dash_offset' not in st.session_state: st.session_state.dash_offset = 0
 
     def get_date_range(period, offset):
         today = datetime.now().date()
-        
         if period == "Weekly":
-            # Start of week = Monday
             start_of_week = today - timedelta(days=today.weekday())
             start_date = start_of_week - timedelta(weeks=offset)
             end_date = start_date + timedelta(days=6)
             label = f"{start_date.strftime('%b %d')} - {end_date.strftime('%b %d, %Y')}"
-            
         elif period == "Monthly":
-            # Calculate month based on offset
             total_months = today.year * 12 + today.month - 1 - offset
             year = total_months // 12
             month = total_months % 12 + 1
             start_date = date(year, month, 1)
-            
-            # Last day is day before next month start
-            if month == 12:
-                end_date = date(year + 1, 1, 1) - timedelta(days=1)
-            else:
-                end_date = date(year, month + 1, 1) - timedelta(days=1)
+            if month == 12: end_date = date(year + 1, 1, 1) - timedelta(days=1)
+            else: end_date = date(year, month + 1, 1) - timedelta(days=1)
             label = start_date.strftime("%B %Y")
-
         elif period == "6 Months":
             current_half = 0 if today.month <= 6 else 1
             total_halves = today.year * 2 + current_half - offset
             year = total_halves // 2
             half = total_halves % 2
-            if half == 0:
-                start_date = date(year, 1, 1)
-                end_date = date(year, 6, 30)
-                label = f"H1 {year} (Jan - Jun)"
-            else:
-                start_date = date(year, 7, 1)
-                end_date = date(year, 12, 31)
-                label = f"H2 {year} (Jul - Dec)"
-                
-        else: # Yearly
+            if half == 0: start_date, end_date, label = date(year, 1, 1), date(year, 6, 30), f"H1 {year} (Jan - Jun)"
+            else: start_date, end_date, label = date(year, 7, 1), date(year, 12, 31), f"H2 {year} (Jul - Dec)"
+        else: 
             target_year = today.year - offset
-            start_date = date(target_year, 1, 1)
-            end_date = date(target_year, 12, 31)
-            label = str(target_year)
-            
+            start_date, end_date, label = date(target_year, 1, 1), date(target_year, 12, 31), str(target_year)
         return start_date, end_date, label
 
-    # UI for Controls
     with st.container(border=True):
         c_p, c_nav = st.columns([1.5, 2.5])
         with c_p:
@@ -811,23 +804,15 @@ elif selected_tab == "Field (Runs)":
                 st.rerun()
         
         start_d, end_d, d_label = get_date_range(st.session_state.dash_period, st.session_state.dash_offset)
-        
         with c_nav:
             c_prev, c_lbl, c_next = st.columns([1, 2, 1])
-            if c_prev.button("◀", use_container_width=True):
-                st.session_state.dash_offset += 1
-                st.rerun()
+            if c_prev.button("◀", use_container_width=True): st.session_state.dash_offset += 1; st.rerun()
             c_lbl.markdown(f"<div style='text-align: center; padding-top: 5px; font-weight: 600; color: #334155;'>{d_label}</div>", unsafe_allow_html=True)
-            if c_next.button("▶", use_container_width=True, disabled=(st.session_state.dash_offset <= 0)):
-                st.session_state.dash_offset -= 1
-                st.rerun()
+            if c_next.button("▶", use_container_width=True, disabled=(st.session_state.dash_offset <= 0)): st.session_state.dash_offset -= 1; st.rerun()
 
-    # Filter Dataframe based on Period
     period_runs_df = pd.DataFrame(columns=runs_df.columns)
     if not runs_df.empty:
-        # Ensure we have datetime objects
         runs_df['dt_obj'] = pd.to_datetime(runs_df['date']).dt.date
-        # Filter
         period_runs_df = runs_df[ (runs_df['dt_obj'] >= start_d) & (runs_df['dt_obj'] <= end_d) ]
 
     tabs = st.tabs(["All Activities", "Run", "Walk", "Ultimate"])
@@ -844,7 +829,6 @@ elif selected_tab == "Field (Runs)":
             total_mins = filtered_df['duration'].sum() if not filtered_df.empty else 0
             count = len(filtered_df)
             avg_hr = filtered_df['avgHr'].mean() if not filtered_df.empty and filtered_df['avgHr'].sum() > 0 else 0
-            
             pace_label = "-"
             if total_dist > 0:
                 avg_pace_val = total_mins / total_dist
@@ -864,49 +848,27 @@ elif selected_tab == "Field (Runs)":
             st.divider()
 
             if not filtered_df.empty:
-                # Sort Chronologically: Latest First
                 filtered_df = filtered_df.sort_values(by='dt_obj', ascending=False)
-
                 for idx, row in filtered_df.iterrows():
                     with st.container(border=True):
                         c_main, c_stats, c_extra, c_act = st.columns([2, 3, 2, 1.5])
                         icon_map = {"Run": ":material/directions_run:", "Walk": ":material/directions_walk:", "Ultimate": ":material/sports_handball:"}
-                        
-                        # Date Formatting: Friday, Dec 05
                         date_obj = datetime.strptime(row['date'], '%Y-%m-%d')
                         date_str = date_obj.strftime('%A, %b %d')
-                        
                         c_main.markdown(f"**{date_str}**")
                         c_main.markdown(f"{icon_map.get(row['type'], ':material/help:')} {row['type']}")
-                        stats_html = f"""
-                        <div style="line-height: 1.4;">
-                            <span class="history-sub">Dist:</span> <span class="history-value">{row['distance']}km</span><br>
-                            <span class="history-sub">Time:</span> <span class="history-value">{format_duration(row['duration'])}</span><br>
-                            <span class="history-sub">{'Note' if row['type'] == 'Ultimate' else 'Pace'}:</span> 
-                            <span class="history-value">{row.get('notes','-') if row['type']=='Ultimate' else format_pace(row['duration']/row['distance'] if row['distance']>0 else 0)+'/km'}</span>
-                        </div>
-                        """
+                        stats_html = f"""<div style="line-height: 1.4;"><span class="history-sub">Dist:</span> <span class="history-value">{row['distance']}km</span><br><span class="history-sub">Time:</span> <span class="history-value">{format_duration(row['duration'])}</span><br><span class="history-sub">{'Note' if row['type'] == 'Ultimate' else 'Pace'}:</span> <span class="history-value">{row.get('notes','-') if row['type']=='Ultimate' else format_pace(row['duration']/row['distance'] if row['distance']>0 else 0)+'/km'}</span></div>"""
                         c_stats.markdown(stats_html, unsafe_allow_html=True)
-                        
                         feel_val = row.get('feel', '')
-                        feel_emoji = {
-                            "Good": '<span class="material-symbols-rounded">sentiment_satisfied</span>',
-                            "Normal": '<span class="material-symbols-rounded">sentiment_neutral</span>',
-                            "Tired": '<span class="material-symbols-rounded">sentiment_dissatisfied</span>',
-                            "Pain": '<span class="material-symbols-rounded">sick</span>'
-                        }.get(feel_val, "")
-                        
-                        # NEW METRICS HTML BLOCK (No Expander)
+                        feel_emoji = {"Good": '<span class="material-symbols-rounded">sentiment_satisfied</span>', "Normal": '<span class="material-symbols-rounded">sentiment_neutral</span>', "Tired": '<span class="material-symbols-rounded">sentiment_dissatisfied</span>', "Pain": '<span class="material-symbols-rounded">sick</span>'}.get(feel_val, "")
                         metrics_list = []
                         if row['avgHr'] > 0: metrics_list.append(f"<span class='history-sub'>HR:</span> <span class='history-value'>{row['avgHr']}</span>")
                         metrics_list.append(f"<span class='history-sub'>RPE:</span> <span class='history-value'>{row.get('rpe', '-')}</span>")
                         if row.get('cadence', 0) > 0: metrics_list.append(f"<span class='history-sub'>Cad:</span> <span class='history-value'>{row['cadence']}</span>")
                         if row.get('power', 0) > 0: metrics_list.append(f"<span class='history-sub'>Pwr:</span> <span class='history-value'>{row['power']}</span>")
-                        
                         metrics_html = "<div style='line-height: 1.4;'>" + "<br>".join(metrics_list) + "</div>"
                         metrics_html += f"<div style='margin-top:4px;'>{feel_emoji}</div>"
                         c_extra.markdown(metrics_html, unsafe_allow_html=True)
-
                         with c_act:
                             if st.button(":material/edit:", key=f"ed_{row['id']}_{idx}_{filter_cat}"):
                                 st.session_state.edit_run_id = row['id']
@@ -915,78 +877,37 @@ elif selected_tab == "Field (Runs)":
                                 st.session_state.data['runs'] = [r for r in st.session_state.data['runs'] if r['id'] != row['id']]
                                 persist()
                                 st.rerun()
-                        
-                        # Render Zones (Stacked Bar - Improved)
                         z_vals = [row.get(f'z{i}', 0) for i in range(1, 6)]
                         total_z_time = sum(z_vals)
                         if total_z_time > 0:
                             pcts = [(v/total_z_time)*100 for v in z_vals]
                             t_strs = [format_duration(v) if v > 0 else "" for v in z_vals]
-                            
-                            # Helper to decide if text fits
                             def get_lbl(pct, txt): return txt if pct > 10 else ""
-                            
-                            bar_html = f"""
-                            <div style="display: flex; width: 100%; height: 18px; border-radius: 4px; overflow: hidden; margin-top: 8px; background-color: #f1f5f9;">
-                                <div style="width: {pcts[0]}%; background-color: #1e40af; color: white; font-size: 10px; display: flex; align-items: center; justify-content: center; overflow: hidden;">{get_lbl(pcts[0], t_strs[0])}</div>
-                                <div style="width: {pcts[1]}%; background-color: #60a5fa; color: white; font-size: 10px; display: flex; align-items: center; justify-content: center; overflow: hidden;">{get_lbl(pcts[1], t_strs[1])}</div>
-                                <div style="width: {pcts[2]}%; background-color: #facc15; color: black; font-size: 10px; display: flex; align-items: center; justify-content: center; overflow: hidden;">{get_lbl(pcts[2], t_strs[2])}</div>
-                                <div style="width: {pcts[3]}%; background-color: #fb923c; color: white; font-size: 10px; display: flex; align-items: center; justify-content: center; overflow: hidden;">{get_lbl(pcts[3], t_strs[3])}</div>
-                                <div style="width: {pcts[4]}%; background-color: #f87171; color: white; font-size: 10px; display: flex; align-items: center; justify-content: center; overflow: hidden;">{get_lbl(pcts[4], t_strs[4])}</div>
-                            </div>
-                            """
+                            bar_html = f"""<div style="display: flex; width: 100%; height: 18px; border-radius: 4px; overflow: hidden; margin-top: 8px; background-color: #f1f5f9;"><div style="width: {pcts[0]}%; background-color: #1e40af; color: white; font-size: 10px; display: flex; align-items: center; justify-content: center; overflow: hidden;">{get_lbl(pcts[0], t_strs[0])}</div><div style="width: {pcts[1]}%; background-color: #60a5fa; color: white; font-size: 10px; display: flex; align-items: center; justify-content: center; overflow: hidden;">{get_lbl(pcts[1], t_strs[1])}</div><div style="width: {pcts[2]}%; background-color: #facc15; color: black; font-size: 10px; display: flex; align-items: center; justify-content: center; overflow: hidden;">{get_lbl(pcts[2], t_strs[2])}</div><div style="width: {pcts[3]}%; background-color: #fb923c; color: white; font-size: 10px; display: flex; align-items: center; justify-content: center; overflow: hidden;">{get_lbl(pcts[3], t_strs[3])}</div><div style="width: {pcts[4]}%; background-color: #f87171; color: white; font-size: 10px; display: flex; align-items: center; justify-content: center; overflow: hidden;">{get_lbl(pcts[4], t_strs[4])}</div></div>"""
                             st.markdown(bar_html, unsafe_allow_html=True)
-
-                        # Notes (if any)
-                        if row.get('notes'):
-                             st.markdown(f"<div style='margin-top:5px; font-size:0.85rem; color:#475569;'>📝 {row['notes']}</div>", unsafe_allow_html=True)
-
+                        if row.get('notes'): st.markdown(f"<div style='margin-top:5px; font-size:0.85rem; color:#475569;'>📝 {row['notes']}</div>", unsafe_allow_html=True)
             else:
                 st.info("No activities found for this category.")
 
 # --- TAB: GYM ---
 elif selected_tab == "Gym":
     st.header(":material/fitness_center: Gym & Weights")
-    
-    # Initialize active workout session state
-    if 'active_workout' not in st.session_state:
-        st.session_state.active_workout = None
-    
-    # Save Dialog State
-    if 'gym_save_dialog' not in st.session_state:
-        st.session_state.gym_save_dialog = False
+    if 'active_workout' not in st.session_state: st.session_state.active_workout = None
+    if 'gym_save_dialog' not in st.session_state: st.session_state.gym_save_dialog = False
 
-    # --- Mode 1: Selection Screen ---
     if st.session_state.active_workout is None and not st.session_state.gym_save_dialog:
         col_rout, col_hist = st.tabs(["Start Workout", "History"])
-        
         with col_rout:
             st.subheader("Start from Routine")
             routine_opts = {r['name']: r for r in st.session_state.data['routines']}
-            
             if routine_opts:
                 sel_r_name = st.selectbox("Select Routine", list(routine_opts.keys()))
                 if st.button(":material/play_arrow: Start Workout", use_container_width=True):
-                    # Deep copy routine to active state
                     selected = routine_opts[sel_r_name]
-                    # Transform structure for active logging: Add sets array
-                    exercises_prep = []
-                    for ex_name in selected['exercises']:
-                        exercises_prep.append({
-                            "name": ex_name,
-                            "sets": [{"reps": "", "weight": ""} for _ in range(3)] # Default 3 empty sets
-                        })
-                    
-                    st.session_state.active_workout = {
-                        "routine_id": selected['id'],
-                        "routine_name": selected['name'],
-                        "date": datetime.now().date(),
-                        "exercises": exercises_prep
-                    }
+                    exercises_prep = [{"name": ex_name, "sets": [{"reps": "", "weight": ""} for _ in range(3)]} for ex_name in selected['exercises']]
+                    st.session_state.active_workout = {"routine_id": selected['id'], "routine_name": selected['name'], "date": datetime.now().date(), "exercises": exercises_prep}
                     st.rerun()
-            else:
-                st.info("No routines found. Create one below.")
-
+            else: st.info("No routines found. Create one below.")
             st.divider()
             with st.expander("Manage Routines"):
                 with st.form("new_routine"):
@@ -999,7 +920,6 @@ elif selected_tab == "Gym":
                         persist()
                         st.success("Routine Created!")
                         st.rerun()
-                
                 for r in st.session_state.data['routines']:
                     c1, c2 = st.columns([5, 1])
                     c1.markdown(f"**{r['name']}**")
@@ -1008,7 +928,6 @@ elif selected_tab == "Gym":
                         st.session_state.data['routines'] = [x for x in st.session_state.data['routines'] if x['id'] != r['id']]
                         persist()
                         st.rerun()
-
         with col_hist:
             sessions = st.session_state.data['gym_sessions']
             if sessions:
@@ -1027,358 +946,171 @@ elif selected_tab == "Gym":
                             st.session_state.data['gym_sessions'] = [x for x in st.session_state.data['gym_sessions'] if x['id'] != s['id']]
                             persist()
                             st.rerun()
-            else:
-                st.info("No gym sessions logged.")
+            else: st.info("No gym sessions logged.")
 
-    # --- Mode 2: Active Logging Screen ---
     elif st.session_state.active_workout is not None and not st.session_state.gym_save_dialog:
         aw = st.session_state.active_workout
-        
-        # Header
         c_head, c_canc = st.columns([3, 1])
         c_head.subheader(f":material/fitness_center: {aw['routine_name']}")
         if c_canc.button("Cancel"):
             st.session_state.active_workout = None
             st.rerun()
-            
         aw['date'] = st.date_input("Date", aw['date'])
-        
         st.divider()
-        
-        # Exercises Loop
-        # We iterate by index to modify in place
         exercises_to_remove = []
-        
         for i, ex in enumerate(aw['exercises']):
             with st.container(border=True):
-                # Header Row: Name | History | Remove
                 ch1, ch2, ch3 = st.columns([3, 3, 1])
                 new_name = ch1.text_input(f"Exercise {i+1}", value=ex['name'], key=f"ex_name_{i}")
                 ex['name'] = new_name
-                
-                # History Lookup
                 last_stats = get_last_lift_stats(new_name)
-                if last_stats:
-                    ch2.info(f"Last: {last_stats}")
-                else:
-                    ch2.caption("No history found")
-                    
-                if ch3.button(":material/delete:", key=f"del_ex_{i}"):
-                    exercises_to_remove.append(i)
-                
-                # Sets Header
-                st.markdown(f"""
-                <div style="display:grid; grid-template-columns: 1fr 1fr 0.5fr; gap:10px; font-size:0.8rem; font-weight:600; color:#64748b; margin-bottom:5px;">
-                    <div>REPS</div><div>WEIGHT (kg)</div><div></div>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                # Sets Loop
+                if last_stats: ch2.info(f"Last: {last_stats}")
+                else: ch2.caption("No history found")
+                if ch3.button(":material/delete:", key=f"del_ex_{i}"): exercises_to_remove.append(i)
+                st.markdown("""<div style="display:grid; grid-template-columns: 1fr 1fr 0.5fr; gap:10px; font-size:0.8rem; font-weight:600; color:#64748b; margin-bottom:5px;"><div>REPS</div><div>WEIGHT (kg)</div><div></div></div>""", unsafe_allow_html=True)
                 sets_to_remove = []
                 for j, s in enumerate(ex['sets']):
                     c_reps, c_w, c_del = st.columns([1, 1, 0.5])
                     s['reps'] = c_reps.text_input("Reps", value=s['reps'], key=f"r_{i}_{j}", label_visibility="collapsed", placeholder="10")
                     s['weight'] = c_w.text_input("Weight", value=s['weight'], key=f"w_{i}_{j}", label_visibility="collapsed", placeholder="50")
-                    if c_del.button(":material/close:", key=f"del_set_{i}_{j}"):
-                        sets_to_remove.append(j)
-                
-                # Process Set Deletions
+                    if c_del.button(":material/close:", key=f"del_set_{i}_{j}"): sets_to_remove.append(j)
                 if sets_to_remove:
-                    for index in sorted(sets_to_remove, reverse=True):
-                        del ex['sets'][index]
+                    for index in sorted(sets_to_remove, reverse=True): del ex['sets'][index]
                     st.rerun()
-                
-                # Add Set Button
                 if st.button(f":material/add: Add Set", key=f"add_set_{i}"):
                     ex['sets'].append({"reps": "", "weight": ""})
                     st.rerun()
-
-        # Process Exercise Deletions
         if exercises_to_remove:
-            for index in sorted(exercises_to_remove, reverse=True):
-                del aw['exercises'][index]
+            for index in sorted(exercises_to_remove, reverse=True): del aw['exercises'][index]
             st.rerun()
-
-        # Add New Exercise Button
         if st.button(":material/add_circle: Add New Exercise"):
             aw['exercises'].append({"name": "New Exercise", "sets": [{"reps": "", "weight": ""} for _ in range(3)]})
             st.rerun()
-            
         st.divider()
         if st.button(":material/check_circle: Finish Workout", type="primary", use_container_width=True):
             st.session_state.gym_save_dialog = True
             st.rerun()
 
-    # --- Mode 3: Save Dialog ---
     elif st.session_state.gym_save_dialog:
         st.subheader("🎉 Workout Complete!")
         st.info("You modified the routine structure. Would you like to update the original routine?")
-        
         aw = st.session_state.active_workout
-        
         c1, c2 = st.columns(2)
-        
-        # Calculate Volume & Clean Data
         final_exercises = []
         total_vol = 0
         current_ex_names = []
-        
         for ex in aw['exercises']:
             clean_sets = []
             for s in ex['sets']:
-                # Basic validation: check if valid numbers
                 try:
                     r_val = float(s['reps'])
                     w_val = float(s['weight'])
-                    clean_sets.append({"reps": s['reps'], "weight": s['weight']}) # Store as string for flexibility, calc with float
+                    clean_sets.append({"reps": s['reps'], "weight": s['weight']})
                     total_vol += r_val * w_val
-                except:
-                    continue # Skip empty/invalid sets
-            
-            if clean_sets: # Only save exercises with valid sets
-                final_exercises.append({
-                    "name": ex['name'],
-                    "sets": clean_sets
-                })
+                except: continue
+            if clean_sets:
+                final_exercises.append({"name": ex['name'], "sets": clean_sets})
                 current_ex_names.append(ex['name'])
-
-        new_session = {
-            "id": int(time.time()),
-            "date": str(aw['date']),
-            "routineName": aw['routine_name'],
-            "exercises": final_exercises,
-            "totalVolume": total_vol
-        }
-
-        # Option 1: Update Routine
+        new_session = {"id": int(time.time()), "date": str(aw['date']), "routineName": aw['routine_name'], "exercises": final_exercises, "totalVolume": total_vol}
         if c1.button(":material/update: Save & Update Routine"):
-            # Update Routine Definition
             for r in st.session_state.data['routines']:
                 if r['id'] == aw['routine_id']:
                     r['exercises'] = current_ex_names
                     break
-            
-            # Save Session
             st.session_state.data['gym_sessions'].insert(0, new_session)
             persist()
-            
-            # Reset State
             st.session_state.active_workout = None
             st.session_state.gym_save_dialog = False
             st.success("Routine updated and workout logged!")
             st.rerun()
-
-        # Option 2: Just Save
         if c2.button(":material/save: Just Save Session"):
             st.session_state.data['gym_sessions'].insert(0, new_session)
             persist()
-            
             st.session_state.active_workout = None
             st.session_state.gym_save_dialog = False
             st.success("Workout logged!")
             st.rerun()
-            
         if st.button("Go Back"):
             st.session_state.gym_save_dialog = False
             st.rerun()
 
-# --- TAB: STATS (HEALTH) ---
-elif selected_tab == "Stats":
-    st.header(":material/favorite: Physiological Stats")
-    edit_hlth_id = st.session_state.get('edit_hlth_id', None)
-    def_h_date, def_rhr, def_hrv, def_vo2, def_sleep = datetime.now(), 60, 0, 0.0, 0.0
-    if edit_hlth_id:
-        h_data = next((h for h in st.session_state.data['health_logs'] if h['id'] == edit_hlth_id), None)
-        if h_data:
-            def_h_date = datetime.strptime(h_data['date'], '%Y-%m-%d').date()
-            def_rhr = h_data['rhr']
-            def_hrv = h_data['hrv']
-            def_vo2 = h_data['vo2Max']
-            def_sleep = h_data['sleepHours']
-
-    lbl_h = ":material/edit: Edit Stats" if edit_hlth_id else ":material/add_circle: Log Health Stats"
-    expanded_h = True if edit_hlth_id else False
-
-    with st.expander(lbl_h, expanded=expanded_h):
-        with st.form("health_form"):
-            h_date = st.date_input("Date", def_h_date)
-            c1, c2 = st.columns(2)
-            rhr = c1.number_input("Resting HR", min_value=30, max_value=150, value=int(def_rhr))
-            hrv = c2.number_input("HRV (ms)", min_value=0, value=int(def_hrv))
-            c3, c4 = st.columns(2)
-            vo2 = c3.number_input("VO2 Max", min_value=0.0, value=float(def_vo2), step=0.1)
-            sleep = c4.number_input("Sleep (hrs)", min_value=0.0, value=float(def_sleep), step=0.1)
-            btn_h_txt = "Update Stats" if edit_hlth_id else "Log Stats"
-            if st.form_submit_button(btn_h_txt):
-                new_h = {"id": edit_hlth_id if edit_hlth_id else int(time.time()), "date": str(h_date), "rhr": rhr, "hrv": hrv, "vo2Max": vo2, "sleepHours": sleep}
-                if edit_hlth_id:
-                     idx = next((i for i, h in enumerate(st.session_state.data['health_logs']) if h['id'] == edit_hlth_id), -1)
-                     if idx != -1: st.session_state.data['health_logs'][idx] = new_h
-                     st.session_state.edit_hlth_id = None
-                     st.success("Stats Updated!")
-                else:
-                    st.session_state.data['health_logs'].insert(0, new_h)
-                    st.success("Stats Logged!")
-                persist()
-                st.rerun()
-        if edit_hlth_id:
-            if st.button("Cancel Edit", key="cancel_h"):
-                st.session_state.edit_hlth_id = None
-                st.rerun()
-
-    health_df = pd.DataFrame(st.session_state.data['health_logs'])
-    if not health_df.empty:
-        health_df['date'] = pd.to_datetime(health_df['date'])
-        health_df = health_df.sort_values(by='date')
-        c1, c2 = st.columns(2)
-        with c1:
-            with st.container(border=True):
-                fig_hrv = px.line(health_df, x='date', y='hrv', title="HRV Trends", markers=True)
-                fig_hrv.update_traces(line_color='#22c55e')
-                fig_hrv.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_family="Inter", margin=dict(l=20, r=20, t=40, b=20), height=250)
-                st.plotly_chart(fig_hrv, use_container_width=True)
-        with c2:
-            with st.container(border=True):
-                fig_sleep = px.bar(health_df, x='date', y='sleepHours', title="Sleep Duration")
-                fig_sleep.update_traces(marker_color='#6366f1')
-                fig_sleep.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_family="Inter", margin=dict(l=20, r=20, t=40, b=20), height=250)
-                st.plotly_chart(fig_sleep, use_container_width=True)
-        
-        st.divider()
-        st.subheader("History")
-        list_h_df = health_df.sort_values(by='date', ascending=False)
-        for index, row in list_h_df.iterrows():
-             with st.container():
-                 # Mobile Optimized 3-col layout
-                 hc1, hc2, hc3 = st.columns([2, 4, 1.5])
-                 hc1.markdown(f"**{row['date'].date()}**")
-                 stats_str = f"""
-                 <div style="line-height:1.4;">
-                    <span class="history-sub">RHR:</span> <b>{row['rhr']}</b> &nbsp; 
-                    <span class="history-sub">HRV:</span> <b>{row['hrv']}</b><br>
-                    <span class="history-sub">VO2:</span> <b>{row['vo2Max']}</b> &nbsp;
-                    <span class="history-sub">Sleep:</span> <b>{row['sleepHours']}h</b>
-                 </div>
-                 """
-                 hc2.markdown(stats_str, unsafe_allow_html=True)
-                 with hc3:
-                    if st.button(":material/edit:", key=f"edit_h_{row['id']}"):
-                        st.session_state.edit_hlth_id = row['id']
-                        st.rerun()
-                    if st.button(":material/delete:", key=f"del_h_{row['id']}"):
-                        st.session_state.data['health_logs'] = [x for x in st.session_state.data['health_logs'] if x['id'] != row['id']]
-                        persist()
-                        st.rerun()
-    else:
-        st.info("No health stats logged yet.")
-
 # --- TAB: PHYSIO (UPDATED) ---
 elif selected_tab == "Physio":
     st.header(":material/monitor_heart: Physiological Status")
-    
-    # Initialize Engine
     engine = PhysiologyEngine(st.session_state.data['user_profile'])
-    
-    # Calculate Metrics for History
     history_data = []
     runs = st.session_state.data['runs']
     for r in runs:
-        # Prepare Zones list
-        zones = [
-            float(r.get('z1', 0)), float(r.get('z2', 0)), 
-            float(r.get('z3', 0)), float(r.get('z4', 0)), 
-            float(r.get('z5', 0))
-        ]
-        
-        trimp = engine.calculate_trimp(
-            duration_min=float(r['duration']),
-            avg_hr=int(r['avgHr']),
-            zones=zones
-        )
-        
-        te = engine.get_training_effect(trimp)
-        
-        history_data.append({
-            'date': r['date'],
-            'load': trimp,
-            'te': te,
-            'type': r['type'],
-            'dist': r['distance']
-        })
-        
-    # Calculate Status
+        zones = [float(r.get('z1', 0)), float(r.get('z2', 0)), float(r.get('z3', 0)), float(r.get('z4', 0)), float(r.get('z5', 0))]
+        trimp, focus_score = engine.calculate_trimp(duration_min=float(r['duration']), avg_hr=int(r['avgHr']), zones=zones)
+        te, te_label = engine.get_training_effect(trimp)
+        history_data.append({'date': r['date'], 'load': trimp, 'te': te, 'te_lbl': te_label, 'type': r['type'], 'focus': focus_score})
     status_data = engine.calculate_training_status(history_data)
     
-    # --- DASHBOARD UI ---
-    
-    # 1. Status Card
     with st.container(border=True):
         st.subheader("Training Status")
-        
         sc1, sc2 = st.columns([3, 2])
-        
         with sc1:
-            st.markdown(f"""
-            <div style="background-color: {status_data['css'] == 'status-green' and '#dcfce7' or status_data['css'] == 'status-red' and '#fee2e2' or status_data['css'] == 'status-orange' and '#ffedd5' or '#f1f5f9'}; 
-                        padding: 1rem; border-radius: 12px; border: 1px solid #e2e8f0;">
-                <h2 style="margin:0; color: #0f172a;">{status_data['status']}</h2>
-                <p style="margin:5px 0 0 0; color: #475569;">{status_data['desc']}</p>
-            </div>
-            """, unsafe_allow_html=True)
-            
+            st.markdown(f"""<div style="background-color: {status_data['css'] == 'status-green' and '#dcfce7' or status_data['css'] == 'status-red' and '#fee2e2' or status_data['css'] == 'status-orange' and '#ffedd5' or '#f1f5f9'}; padding: 1rem; border-radius: 12px; border: 1px solid #e2e8f0;"><h2 style="margin:0; color: #0f172a;">{status_data['status']}</h2><p style="margin:5px 0 0 0; color: #475569;">{status_data['desc']}</p></div>""", unsafe_allow_html=True)
         with sc2:
             ratio_val = status_data['ratio']
             st.metric("Acute:Chronic Ratio", ratio_val, delta=None)
-            # Simple gauge visual
-            gauge_html = f"""
-            <div style="height: 10px; width: 100%; background: #e2e8f0; border-radius: 5px; margin-top: 10px; position: relative;">
-                <div style="height: 100%; width: {min(ratio_val/2.0 * 100, 100)}%; background: {'#22c55e' if 0.8 <= ratio_val <= 1.3 else '#ef4444' if ratio_val > 1.5 else '#f97316'}; border-radius: 5px;"></div>
-                <div style="position: absolute; top: -5px; left: 50%; height: 20px; width: 2px; background: black;"></div>
-            </div>
-            <div style="display: flex; justify-content: space-between; font-size: 0.7rem; color: #64748b;">
-                <span>0.0</span><span>1.0</span><span>2.0+</span>
-            </div>
-            """
+            gauge_html = f"""<div style="height: 10px; width: 100%; background: #e2e8f0; border-radius: 5px; margin-top: 10px; position: relative;"><div style="height: 100%; width: {min(ratio_val/2.0 * 100, 100)}%; background: {'#22c55e' if 0.8 <= ratio_val <= 1.3 else '#ef4444' if ratio_val > 1.5 else '#f97316'}; border-radius: 5px;"></div><div style="position: absolute; top: -5px; left: 50%; height: 20px; width: 2px; background: black;"></div></div><div style="display: flex; justify-content: space-between; font-size: 0.7rem; color: #64748b;"><span>0.0</span><span>1.0</span><span>2.0+</span></div>"""
             st.markdown(gauge_html, unsafe_allow_html=True)
-
-    # 2. Load Details
     c1, c2 = st.columns(2)
-    with c1:
-        st.metric("Acute Load (7d)", int(status_data['acute']))
-    with c2:
-        st.metric("Chronic Load (28d)", int(status_data['chronic']))
+    with c1: st.metric("Acute Load (7d)", int(status_data['acute']))
+    with c2: st.metric("Chronic Load (28d)", int(status_data['chronic']))
+    
+    st.divider()
+    st.subheader("Load Focus (4 weeks)")
+    buckets = status_data['buckets']
+    b_labels = ["Anaerobic (Z5)", "High Aerobic (Z3/Z4)", "Low Aerobic (Z1/Z2)"]
+    b_vals = [buckets['anaerobic'], buckets['high'], buckets['low']]
+    fig_buckets = px.bar(x=b_vals, y=b_labels, orientation='h', text_auto='.0f', color=b_labels, color_discrete_sequence=["#8b5cf6", "#f97316", "#3b82f6"])
+    fig_buckets.update_layout(showlegend=False, xaxis_title="Load", yaxis_title="")
+    st.plotly_chart(fig_buckets, use_container_width=True)
 
     st.divider()
-    
-    # 3. Activity Analysis
     st.subheader("Activity Analysis")
-    
     if history_data:
-        # Convert to DF for display
-        df_phys = pd.DataFrame(history_data)
-        # Sort by date
-        df_phys = df_phys.sort_values(by='date', ascending=False).head(10)
-        
+        df_phys = pd.DataFrame(history_data).sort_values(by='date', ascending=False).head(10)
         for i, row in df_phys.iterrows():
             with st.container(border=True):
                 pc1, pc2, pc3, pc4 = st.columns([2, 2, 2, 2])
                 pc1.markdown(f"**{row['date']}**")
                 pc1.caption(row['type'])
-                
-                pc2.metric("TRIMP", int(row['load']))
-                pc3.metric("TE (0-5)", row['te'])
-                
-                # Visual TE bar
+                trimp_lbl = engine.get_trimp_label(row['load'])
+                pc2.metric("TRIMP", f"{int(row['load'])}", trimp_lbl, delta_color="off")
+                pc3.metric("TE", row['te'], row['te_lbl'], delta_color="off")
                 width_pct = min(row['te'] / 5.0 * 100, 100)
                 color = "#22c55e" if row['te'] < 3 else "#f59e0b" if row['te'] < 4 else "#ef4444"
-                pc4.markdown(f"""
-                <div style="margin-top: 15px; height: 8px; width: 100%; background: #f1f5f9; border-radius: 4px;">
-                    <div style="height: 100%; width: {width_pct}%; background: {color}; border-radius: 4px;"></div>
-                </div>
-                <div style="font-size: 0.7rem; color: #64748b; text-align: right;">Impact</div>
-                """, unsafe_allow_html=True)
-    else:
-        st.info("No activities found to analyze.")
+                pc4.markdown(f"""<div style="margin-top: 15px; height: 8px; width: 100%; background: #f1f5f9; border-radius: 4px;"><div style="height: 100%; width: {width_pct}%; background: {color}; border-radius: 4px;"></div></div><div style="font-size: 0.7rem; color: #64748b; text-align: right;">Impact</div>""", unsafe_allow_html=True)
+    else: st.info("No activities found to analyze.")
+    
+    st.divider()
+    st.subheader("☀️ Morning Check-in")
+    with st.container(border=True):
+        with st.form("daily_health"):
+            h_date = st.date_input("Date", datetime.now())
+            c1, c2 = st.columns(2)
+            rhr = c1.number_input("Resting HR", min_value=30, max_value=150, value=60)
+            hrv = c2.number_input("HRV (ms)", min_value=0, value=40)
+            sleep = st.slider("Sleep Hours", 0.0, 12.0, 7.0, 0.5)
+            if st.form_submit_button("Log Morning Stats"):
+                new_h = {"id": int(time.time()), "date": str(h_date), "rhr": rhr, "hrv": hrv, "sleepHours": sleep, "vo2Max": 0} # minimal structure
+                st.session_state.data['health_logs'].insert(0, new_h)
+                persist()
+                st.success("Logged!")
+                st.rerun()
+    
+        # Simple Readiness Indicator
+        if st.session_state.data['health_logs']:
+            last_log = st.session_state.data['health_logs'][0]
+            base_rhr = st.session_state.data['user_profile'].get('hrRest', 60)
+            diff = last_log['rhr'] - base_rhr
+            if diff > 5: st.warning(f"Your RHR is +{diff} bpm above baseline. Consider rest.")
+            elif diff < -2: st.success(f"Your RHR is -{abs(diff)} bpm below baseline. Good recovery!")
+            else: st.info("Your RHR is normal.")
 
 # --- TAB: TRENDS ---
 elif selected_tab == "Trends":
