@@ -188,6 +188,29 @@ st.markdown("""
     .status-orange { background-color: #ffedd5; color: #9a3412; }
     .status-green { background-color: #dcfce7; color: #166534; }
     .status-gray { background-color: #f1f5f9; color: #475569; }
+    
+    /* Daily Target Card */
+    .daily-target {
+        background-color: #ffffff;
+        border-radius: 12px;
+        padding: 1.5rem;
+        border: 1px solid #e2e8f0;
+        margin-top: 1rem;
+    }
+    .target-header {
+        font-size: 1.1rem;
+        font-weight: 800;
+        margin-bottom: 0.5rem;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .target-load {
+        font-size: 2rem;
+        font-weight: 800;
+        color: #0f172a;
+        margin: 0.5rem 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -200,7 +223,8 @@ class PhysiologyEngine:
         zones: dict with boundary keys
         """
         self.hr_max = float(user_profile.get('hrMax', 190))
-        self.hr_rest = float(user_profile.get('hrRest', 60))
+        # hrRest here comes from the monthAvgRHR in the profile updates
+        self.hr_rest = float(user_profile.get('hrRest', 60)) 
         self.vo2_max = float(user_profile.get('vo2Max', 45))
         self.gender = user_profile.get('gender', 'Male').lower()
         self.zones = user_profile.get('zones', {})
@@ -262,6 +286,40 @@ class PhysiologyEngine:
             else: focus_scores['low'] = load
             
         return load, focus_scores
+
+    def get_daily_target(self, current_rhr):
+        """
+        Determines daily training target based on Morning RHR vs Baseline (hr_rest).
+        """
+        diff = current_rhr - self.hr_rest
+        
+        if diff < -2:
+            # RHR is lower than baseline -> High Readiness
+            return {
+                "readiness": "High",
+                "recommendation": "Go Hard / Interval Day",
+                "target_load": "150 - 250 TRIMP",
+                "message": "Green light. Your system is primed for high intensity.",
+                "color": "#22c55e" # Green
+            }
+        elif diff > 5:
+            # RHR is significantly higher -> Low Readiness
+            return {
+                "readiness": "Low",
+                "recommendation": "Active Recovery / Rest",
+                "target_load": "0 - 40 TRIMP",
+                "message": "Red light. Focus on sleep and mobility today.",
+                "color": "#ef4444" # Red
+            }
+        else:
+            # Moderate Readiness
+            return {
+                "readiness": "Moderate",
+                "recommendation": "Steady State / Base Miles",
+                "target_load": "80 - 150 TRIMP",
+                "message": "Train, but keep it controlled. Don't dig a hole.",
+                "color": "#f97316" # Orange
+            }
 
     def get_training_effect(self, trimp_score):
         """
@@ -662,30 +720,26 @@ if selected_tab == "Training Status":
                 st.success("Logged!")
                 st.rerun()
     
-        # Readiness Indicator using Month Avg from Profile
+        # Readiness Indicator
         if st.session_state.data['health_logs']:
             last_log = st.session_state.data['health_logs'][0]
-            prof = st.session_state.data['user_profile']
-            base_rhr = prof.get('monthAvgRHR', 60)
-            base_hrv = prof.get('monthAvgHRV', 40)
+            engine = PhysiologyEngine(st.session_state.data['user_profile'])
             
-            # RHR Comparison
-            rhr_diff = last_log['rhr'] - base_rhr
-            rhr_status = "Normal"
-            if rhr_diff > 5: rhr_status = "Elevated (+)"
-            elif rhr_diff < -2: rhr_status = "Good (-)"
+            # Daily Target Logic
+            target_data = engine.get_daily_target(last_log['rhr'])
             
-            # HRV Comparison
-            hrv_diff = last_log['hrv'] - base_hrv
-            hrv_status = "Normal"
-            if hrv_diff < -10: hrv_status = "Low (Stressed)"
-            elif hrv_diff > 10: hrv_status = "High (Recovered)"
-            
-            st.caption(f"vs Monthly Baseline: RHR {base_rhr}, HRV {base_hrv}")
-            k1, k2 = st.columns(2)
-            k1.info(f"RHR: {last_log['rhr']} ({rhr_status})")
-            k2.info(f"HRV: {last_log['hrv']} ({hrv_status})")
-            
+            st.markdown(f"""
+            <div class="daily-target" style="border-left: 6px solid {target_data['color']};">
+                <div class="target-header">
+                    <span style="color: {target_data['color']};">{target_data['readiness']} Readiness</span>
+                    <span style="font-weight:400; color:#64748b; font-size:0.9rem;">• RHR {last_log['rhr']}</span>
+                </div>
+                <div style="font-size: 1.2rem; font-weight:700; color:#1e293b;">{target_data['recommendation']}</div>
+                <div class="target-load">Target: {target_data['target_load']}</div>
+                <div style="font-size: 0.9rem; color:#475569; font-style:italic;">"{target_data['message']}"</div>
+            </div>
+            """, unsafe_allow_html=True)
+
     st.divider()
 
     # 2. Training Status & Load
@@ -959,29 +1013,49 @@ elif selected_tab == "Cardio Training":
                     te, te_label = engine.get_training_effect(trimp)
                     
                     with st.container(border=True):
-                        c_main, c_stats, c_extra, c_act = st.columns([1.5, 3, 3, 1])
+                        # Balanced Columns for Symmetry: Date | Type | Stats | Metrics | Actions
+                        # Adjusted weights: [1.5, 1.2, 2.5, 2.5, 1]
+                        c_date, c_type, c_stats, c_metrics, c_act = st.columns([1.5, 1.2, 2.5, 2.5, 1])
+                        
                         icon_map = {"Run": ":material/directions_run:", "Walk": ":material/directions_walk:", "Ultimate": ":material/sports_handball:"}
+                        
+                        # Date & Type
                         date_obj = datetime.strptime(row['date'], '%Y-%m-%d')
                         date_str = date_obj.strftime('%A, %b %d')
-                        c_main.markdown(f"**{date_str}**")
-                        c_main.markdown(f"{icon_map.get(row['type'], ':material/help:')} {row['type']}")
-                        stats_html = f"""<div style="line-height: 1.4;"><span class="history-sub">Dist:</span> <span class="history-value">{row['distance']}km</span><br><span class="history-sub">Time:</span> <span class="history-value">{format_duration(row['duration'])}</span><br><span class="history-sub">{'Note' if row['type'] == 'Ultimate' else 'Pace'}:</span> <span class="history-value">{row.get('notes','-') if row['type']=='Ultimate' else format_pace(row['duration']/row['distance'] if row['distance']>0 else 0)+'/km'}</span><br><span class="history-sub">RPE:</span> <span class="history-value">{row.get('rpe', '-')}</span></div>"""
+                        c_date.markdown(f"**{date_str}**")
+                        c_type.markdown(f"{icon_map.get(row['type'], ':material/help:')} {row['type']}")
+                        
+                        # Main Stats (Dist, Time, Pace)
+                        stats_html = f"""
+                        <div style="line-height: 1.5;">
+                            <span class="history-sub">Dist:</span> <span class="history-value">{row['distance']}km</span><br>
+                            <span class="history-sub">Time:</span> <span class="history-value">{format_duration(row['duration'])}</span><br>
+                            <span class="history-sub">{'Note' if row['type'] == 'Ultimate' else 'Pace'}:</span> 
+                            <span class="history-value">{row.get('notes','-') if row['type']=='Ultimate' else format_pace(row['duration']/row['distance'] if row['distance']>0 else 0)+'/km'}</span>
+                        </div>
+                        """
                         c_stats.markdown(stats_html, unsafe_allow_html=True)
                         
-                        feel_val = row.get('feel', '')
-                        
-                        # METRICS HTML
+                        # Detailed Metrics (HR, Load, TE, Feel)
                         metrics_list = []
                         if row['avgHr'] > 0: metrics_list.append(f"<span class='history-sub'>HR:</span> <span class='history-value'>{row['avgHr']}</span>")
                         metrics_list.append(f"<span class='history-sub'>Load:</span> <span class='history-value'>{int(trimp)}</span>")
-                        metrics_list.append(f"<span class='history-sub'>TE:</span> <span class='history-value status-badge { 'status-green' if 2<=te<4 else 'status-orange' if te>=4 else 'status-gray' }' style='font-size:0.8rem; padding:2px 8px;'>{te} {te_label.split()[0]}</span>")
-                        if row.get('cadence', 0) > 0: metrics_list.append(f"<span class='history-sub'>Cad:</span> <span class='history-value'>{row['cadence']}</span>")
-                        if row.get('power', 0) > 0: metrics_list.append(f"<span class='history-sub'>Pwr:</span> <span class='history-value'>{row['power']}</span>")
+                        metrics_list.append(f"<span class='history-sub'>TE:</span> <span class='history-value status-badge { 'status-green' if 2<=te<4 else 'status-orange' if te>=4 else 'status-gray' }' style='font-size:0.75rem; padding:1px 6px;'>{te} {te_label.split()[0]}</span>")
                         
+                        # Optional metrics
+                        extras = []
+                        if row.get('cadence', 0) > 0: extras.append(f"Cad: {row['cadence']}")
+                        if row.get('power', 0) > 0: extras.append(f"Pwr: {row['power']}")
+                        if extras: metrics_list.append(f"<span class='history-sub'>{' | '.join(extras)}</span>")
+                        
+                        # Feel as Text
+                        feel_val = row.get('feel', '')
+                        if feel_val: metrics_list.append(f"<span class='history-sub'>Feel:</span> <span class='history-value'>{feel_val}</span>")
+
                         metrics_html = "<div style='line-height: 1.5;'>" + "<br>".join(metrics_list) + "</div>"
-                        metrics_html += f"<div style='margin-top:4px; font-weight:500;'>{feel_val}</div>"
-                        c_extra.markdown(metrics_html, unsafe_allow_html=True)
+                        c_metrics.markdown(metrics_html, unsafe_allow_html=True)
                         
+                        # Actions
                         with c_act:
                             if st.button(":material/edit:", key=f"ed_{row['id']}_{idx}_{filter_cat}"):
                                 st.session_state.edit_run_id = row['id']
@@ -990,15 +1064,29 @@ elif selected_tab == "Cardio Training":
                                 st.session_state.data['runs'] = [r for r in st.session_state.data['runs'] if r['id'] != row['id']]
                                 persist()
                                 st.rerun()
+                        
+                        # Render Zones (Stacked Bar - Improved)
                         z_vals = [row.get(f'z{i}', 0) for i in range(1, 6)]
                         total_z_time = sum(z_vals)
                         if total_z_time > 0:
                             pcts = [(v/total_z_time)*100 for v in z_vals]
                             t_strs = [format_duration(v) if v > 0 else "" for v in z_vals]
                             def get_lbl(pct, txt): return txt if pct > 10 else ""
-                            bar_html = f"""<div style="display: flex; width: 100%; height: 18px; border-radius: 4px; overflow: hidden; margin-top: 8px; background-color: #f1f5f9;"><div style="width: {pcts[0]}%; background-color: #1e40af; color: white; font-size: 10px; display: flex; align-items: center; justify-content: center; overflow: hidden;">{get_lbl(pcts[0], t_strs[0])}</div><div style="width: {pcts[1]}%; background-color: #60a5fa; color: white; font-size: 10px; display: flex; align-items: center; justify-content: center; overflow: hidden;">{get_lbl(pcts[1], t_strs[1])}</div><div style="width: {pcts[2]}%; background-color: #facc15; color: black; font-size: 10px; display: flex; align-items: center; justify-content: center; overflow: hidden;">{get_lbl(pcts[2], t_strs[2])}</div><div style="width: {pcts[3]}%; background-color: #fb923c; color: white; font-size: 10px; display: flex; align-items: center; justify-content: center; overflow: hidden;">{get_lbl(pcts[3], t_strs[3])}</div><div style="width: {pcts[4]}%; background-color: #f87171; color: white; font-size: 10px; display: flex; align-items: center; justify-content: center; overflow: hidden;">{get_lbl(pcts[4], t_strs[4])}</div></div>"""
+                            
+                            bar_html = f"""
+                            <div style="display: flex; width: 100%; height: 18px; border-radius: 4px; overflow: hidden; margin-top: 12px; background-color: #f1f5f9;">
+                                <div style="width: {pcts[0]}%; background-color: #1e40af; color: white; font-size: 10px; display: flex; align-items: center; justify-content: center; overflow: hidden;">{get_lbl(pcts[0], t_strs[0])}</div>
+                                <div style="width: {pcts[1]}%; background-color: #60a5fa; color: white; font-size: 10px; display: flex; align-items: center; justify-content: center; overflow: hidden;">{get_lbl(pcts[1], t_strs[1])}</div>
+                                <div style="width: {pcts[2]}%; background-color: #facc15; color: black; font-size: 10px; display: flex; align-items: center; justify-content: center; overflow: hidden;">{get_lbl(pcts[2], t_strs[2])}</div>
+                                <div style="width: {pcts[3]}%; background-color: #fb923c; color: white; font-size: 10px; display: flex; align-items: center; justify-content: center; overflow: hidden;">{get_lbl(pcts[3], t_strs[3])}</div>
+                                <div style="width: {pcts[4]}%; background-color: #f87171; color: white; font-size: 10px; display: flex; align-items: center; justify-content: center; overflow: hidden;">{get_lbl(pcts[4], t_strs[4])}</div>
+                            </div>
+                            """
                             st.markdown(bar_html, unsafe_allow_html=True)
-                        if row.get('notes'): st.markdown(f"<div style='margin-top:5px; font-size:0.85rem; color:#475569;'>📝 {row['notes']}</div>", unsafe_allow_html=True)
+
+                        # Notes (if any)
+                        if row.get('notes'):
+                             st.markdown(f"<div style='margin-top:5px; font-size:0.85rem; color:#475569;'>📝 {row['notes']}</div>", unsafe_allow_html=True)
             else:
                 st.info("No activities found for this category.")
 
