@@ -248,6 +248,66 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# --- Helper Functions (Time & Format) ---
+def get_malaysia_time():
+    """Returns current time in Malaysia (UTC+8)"""
+    # Simple offset without external pytz dependency for robustness
+    return datetime.utcnow() + timedelta(hours=8)
+
+def format_pace(decimal_min):
+    if not decimal_min or decimal_min == 0:
+        return "-"
+    mins = int(decimal_min)
+    secs = int((decimal_min - mins) * 60)
+    return f"{mins}'{secs:02d}\""
+
+def format_duration(decimal_min):
+    if not decimal_min:
+        return "00:00:00"
+    mins = int(decimal_min)
+    secs = int((decimal_min - mins) * 60)
+    hrs = mins // 60
+    rem_mins = mins % 60
+    if hrs > 0:
+        return f"{hrs:02d}:{rem_mins:02d}:{secs:02d}"
+    return f"{rem_mins:02d}:{secs:02d}"
+
+def format_sleep(decimal_hours):
+    """Converts decimal hours (e.g. 6.83) to '6h 50m' string"""
+    if not decimal_hours: return "-"
+    hrs = int(decimal_hours)
+    mins = int((decimal_hours - hrs) * 60)
+    return f"{hrs}h {mins}m"
+
+def parse_time_input(time_str):
+    try:
+        clean = time_str.strip()
+        if not clean: return 0.0
+        parts = clean.split(":")
+        if len(parts) == 3: return float(parts[0]) * 60 + float(parts[1]) + float(parts[2]) / 60
+        elif len(parts) == 2: return float(parts[0]) + float(parts[1]) / 60
+        elif len(parts) == 1: return float(parts[0])
+        return 0.0
+    except:
+        return 0.0
+
+def float_to_hhmm(val):
+    """Converts decimal hours 7.5 to string '07:30' for prefilling text inputs"""
+    if not val: return ""
+    hours = int(val)
+    minutes = int((val - hours) * 60)
+    return f"{hours:02d}:{minutes:02d}"
+
+def scroll_to_top():
+    """Injects JS to scroll to top of page"""
+    js = """
+    <script>
+        var body = window.parent.document.querySelector(".main");
+        if (body) { body.scrollTop = 0; }
+    </script>
+    """
+    components.html(js, height=0)
+
 # --- Physiology Engine ---
 class PhysiologyEngine:
     def __init__(self, user_profile):
@@ -263,10 +323,41 @@ class PhysiologyEngine:
         self.gender = user_profile.get('gender', 'Male').lower()
         self.zones = user_profile.get('zones', {})
 
+    def classify_activity_load(self, load, avg_hr, zones):
+        """
+        Classifies a session's load into Anaerobic, High Aerobic, or Low Aerobic.
+        Rules:
+        - Anaerobic: Time in Z5 > 5 mins OR Avg HR > Z4 threshold
+        - High Aerobic: Time in Z4 > 10 mins AND Not Anaerobic
+        - Low Aerobic: Everything else
+        """
+        # Get thresholds
+        z4_upper = float(self.zones.get('z4_u', 175))
+        z4_lower = float(self.zones.get('z4_l', 161))
+        
+        # Zones list is [z1, z2, z3, z4, z5] in minutes
+        time_z5 = zones[4] if len(zones) > 4 else 0
+        time_z4 = zones[3] if len(zones) > 3 else 0
+        
+        # Anaerobic Check
+        if time_z5 > 5 or (avg_hr > z4_upper):
+            return "anaerobic"
+        
+        # High Aerobic Check
+        if time_z4 > 10:
+            return "high"
+            
+        # Default to Low Aerobic
+        return "low"
+
     def calculate_trimp(self, duration_min, avg_hr=None, zones=None):
         """
         Calculates Training Impulse (TRIMP) using Banister's formula.
-        Splits load into buckets based on zone intensity (SPLIT METHOD).
+        Uses explicit zone boundaries if available.
+        
+        RETURNS: (total_load, focus_scores_dict)
+        Note: focus_scores dict now puts the ENTIRE load into ONE bucket 
+        (Anaerobic, High, or Low) based on the classification of the activity.
         """
         load = 0.0
         focus_scores = {'low': 0, 'high': 0, 'anaerobic': 0}
@@ -280,41 +371,24 @@ class PhysiologyEngine:
             z5_mid = (float(self.zones.get('z5_l', 176)) + self.hr_max) / 2
             
             midpoints = [z1_mid, z2_mid, z3_mid, z4_mid, z5_mid]
-            
             exponent = 1.92 if self.gender == 'male' else 1.67
             
             for i, duration in enumerate(zones):
                 if duration <= 0: continue
-                
                 avg_zone_hr = midpoints[i]
-                
-                # Calculate Load for this segment
                 hr_reserve = max(0.0, min(1.0, (avg_zone_hr - self.hr_rest) / (self.hr_max - self.hr_rest)))
                 segment_load = duration * hr_reserve * 0.64 * math.exp(exponent * hr_reserve)
-                
                 load += segment_load
                 
-                # Classify Focus - Split logic
-                if i <= 1: # Z1, Z2
-                    focus_scores['low'] += segment_load
-                elif i <= 3: # Z3, Z4
-                    focus_scores['high'] += segment_load
-                else: # Z5
-                    focus_scores['anaerobic'] += segment_load
-                
         elif avg_hr and avg_hr > 0:
-            # Basic Banister (Fallback)
+            # Basic Banister
             hr_reserve = max(0.0, min(1.0, (avg_hr - self.hr_rest) / (self.hr_max - self.hr_rest)))
             exponent = 1.92 if self.gender == 'male' else 1.67
             load = duration_min * hr_reserve * 0.64 * math.exp(exponent * hr_reserve)
-            
-            # Estimate focus based on Avg HR against Zone 2/4 boundaries
-            z2_upper = float(self.zones.get('z2_u', 145))
-            z4_upper = float(self.zones.get('z4_u', 175))
-            
-            if avg_hr > z4_upper: focus_scores['anaerobic'] = load
-            elif avg_hr > z2_upper: focus_scores['high'] = load
-            else: focus_scores['low'] = load
+
+        # --- CLASSIFICATION STEP ---
+        focus_type = self.classify_activity_load(load, avg_hr if avg_hr else 0, zones if zones else [0,0,0,0,0])
+        focus_scores[focus_type] = load
             
         return load, focus_scores
 
@@ -331,7 +405,7 @@ class PhysiologyEngine:
                 "recommendation": "Go Hard / Interval Day",
                 "target_load": "Heavy (e.g., Threshold or 90m+ Long Run)",
                 "message": "Green light. Your system is primed for high intensity.",
-                "color": "#22c55e" # Green
+                "color": "#65a30d" # Green
             }
         elif diff > 5:
             # RHR is significantly higher -> Low Readiness
@@ -340,7 +414,7 @@ class PhysiologyEngine:
                 "recommendation": "Active Recovery / Rest",
                 "target_load": "Recovery (e.g., 30m easy jog or Rest)",
                 "message": "Red light. Focus on sleep and mobility today.",
-                "color": "#ef4444" # Red
+                "color": "#be123c" # Red
             }
         else:
             # Moderate Readiness
@@ -349,7 +423,7 @@ class PhysiologyEngine:
                 "recommendation": "Steady State / Base Miles",
                 "target_load": "Maintenance (e.g., 45-60m Aerobic Z2)",
                 "message": "Train, but keep it controlled. Don't dig a hole.",
-                "color": "#f97316" # Orange
+                "color": "#ea580c" # Orange
             }
 
     def get_training_effect(self, trimp_score):
@@ -380,9 +454,8 @@ class PhysiologyEngine:
     def calculate_training_status(self, activity_history):
         """
         Calculates Acute:Chronic Workload Ratio (ACWR) and Status.
-        activity_history: list of dicts with {'date': 'YYYY-MM-DD', 'load': float, 'focus_type': str}
         """
-        today = datetime.now().date()
+        today = get_malaysia_time().date()
         
         acute_start = today - timedelta(days=6) # Last 7 days
         chronic_start = today - timedelta(days=27) # Last 28 days
@@ -390,28 +463,25 @@ class PhysiologyEngine:
         acute_load = 0
         chronic_load_total = 0
         
-        # Bucket Accumulation (Chronic 4-week window)
-        buckets = {'low': 0, 'high': 0, 'anaerobic': 0}
+        bucket_totals = {'low': 0, 'high': 0, 'anaerobic': 0}
         
         for activity in activity_history:
             act_date = datetime.strptime(activity['date'], '%Y-%m-%d').date()
             load = activity.get('load', 0)
-            focus = activity.get('focus', {}) # This is now {type: total_load, others: 0} or split
+            focus = activity.get('focus', {})
             
             if acute_start <= act_date <= today:
                 acute_load += load
                 
             if chronic_start <= act_date <= today:
                 chronic_load_total += load
-                # Accumulate buckets based on the focus dict
-                buckets['low'] += focus.get('low', 0)
-                buckets['high'] += focus.get('high', 0)
-                buckets['anaerobic'] += focus.get('anaerobic', 0)
+                bucket_totals['low'] += focus.get('low', 0)
+                bucket_totals['high'] += focus.get('high', 0)
+                bucket_totals['anaerobic'] += focus.get('anaerobic', 0)
         
         chronic_load_weekly = chronic_load_total / 4.0 if chronic_load_total > 0 else 1.0
         ratio = acute_load / chronic_load_weekly
         
-        # Status Logic
         status = "Recovery"
         color_class = "status-gray"
         description = "Load is very low."
@@ -442,17 +512,16 @@ class PhysiologyEngine:
         total_chronic = chronic_load_total
         targets = {
             'low': {'min': total_chronic * 0.70, 'max': total_chronic * 0.90},
-            'high': {'min': total_chronic * 0.10, 'max': total_chronic * 0.25}, # widened slightly for flexibility
+            'high': {'min': total_chronic * 0.10, 'max': total_chronic * 0.25},
             'anaerobic': {'min': total_chronic * 0.0, 'max': total_chronic * 0.10}
         }
         
-        # Determine Shortages
         feedback = "Balanced! Well done."
         if buckets['low'] < targets['low']['min']:
             feedback = "Shortage: Low Aerobic. You need more easy base miles."
         elif buckets['high'] < targets['high']['min']:
              feedback = "Shortage: High Aerobic. Try a Tempo or Threshold run."
-        elif buckets['anaerobic'] < targets['anaerobic']['min'] and total_chronic > 500: # Only suggest anaerobic if base exists
+        elif buckets['anaerobic'] < targets['anaerobic']['min'] and total_chronic > 500:
              feedback = "Shortage: Anaerobic. Try some sprints or hill repeats."
         elif buckets['low'] > targets['low']['max']:
              feedback = "Focus: High Volume of Easy work detected."
@@ -543,61 +612,6 @@ def get_last_lift_stats(ex_name):
                 sets_str = ", ".join([f"{s['reps']}x{s['weight']}kg" for s in ex['sets']])
                 return sets_str
     return None
-
-# --- Helper Functions ---
-def format_pace(decimal_min):
-    if not decimal_min or decimal_min == 0:
-        return "-"
-    mins = int(decimal_min)
-    secs = int((decimal_min - mins) * 60)
-    return f"{mins}'{secs:02d}\""
-
-def format_duration(decimal_min):
-    if not decimal_min:
-        return "00:00:00"
-    mins = int(decimal_min)
-    secs = int((decimal_min - mins) * 60)
-    hrs = mins // 60
-    rem_mins = mins % 60
-    if hrs > 0:
-        return f"{hrs:02d}:{rem_mins:02d}:{secs:02d}"
-    return f"{rem_mins:02d}:{secs:02d}"
-
-def format_sleep(decimal_hours):
-    """Converts decimal hours (e.g. 6.83) to '6h 50m' string"""
-    if not decimal_hours: return "-"
-    hrs = int(decimal_hours)
-    mins = int((decimal_hours - hrs) * 60)
-    return f"{hrs}h {mins}m"
-
-def parse_time_input(time_str):
-    try:
-        clean = time_str.strip()
-        if not clean: return 0.0
-        parts = clean.split(":")
-        if len(parts) == 3: return float(parts[0]) * 60 + float(parts[1]) + float(parts[2]) / 60
-        elif len(parts) == 2: return float(parts[0]) + float(parts[1]) / 60
-        elif len(parts) == 1: return float(parts[0])
-        return 0.0
-    except:
-        return 0.0
-
-def float_to_hhmm(val):
-    """Converts decimal hours 7.5 to string '07:30' for prefilling text inputs"""
-    if not val: return ""
-    hours = int(val)
-    minutes = int((val - hours) * 60)
-    return f"{hours:02d}:{minutes:02d}"
-
-def scroll_to_top():
-    """Injects JS to scroll to top of page"""
-    js = """
-    <script>
-        var body = window.parent.document.querySelector(".main");
-        if (body) { body.scrollTop = 0; }
-    </script>
-    """
-    components.html(js, height=0)
 
 def generate_report(start_date, end_date, selected_cats):
     report = [f"📊 **Training & Physio Report**"]
@@ -721,6 +735,11 @@ def parse_imported_word_data(docx_file):
 # --- Sidebar Navigation ---
 with st.sidebar:
     st.title(":material/sprint: RunLog Hub")
+    
+    # Current time in Malaysia
+    malaysia_time = get_malaysia_time()
+    st.caption(f"🇲🇾 {malaysia_time.strftime('%d %b %Y, %H:%M')}")
+    
     # Reordered tabs as requested
     selected_tab = st.radio("Navigate", ["Training Status", "Cardio Training", "Gym", "Plan", "Trends", "Share"], label_visibility="collapsed")
     st.divider()
@@ -790,8 +809,8 @@ if selected_tab == "Training Status":
         c_header, c_date = st.columns([3, 2])
         c_header.subheader("☀️ Morning Update")
         
-        # Date picker OUTSIDE the form for dynamic pre-fill
-        h_date = c_date.date_input("Log Date", datetime.now(), label_visibility="collapsed")
+        # Date picker OUTSIDE the form for dynamic pre-fill (Default to Malaysia Time)
+        h_date = c_date.date_input("Log Date", get_malaysia_time(), label_visibility="collapsed")
         
         # Check existing log
         existing_log = next((log for log in st.session_state.data['health_logs'] if log['date'] == str(h_date)), None)
@@ -946,7 +965,7 @@ elif selected_tab == "Cardio Training":
     
     # NO SMART DEFAULTS (Reset to 0)
     def_type = st.session_state.form_act_type
-    def_date = datetime.now()
+    def_date = get_malaysia_time()
     def_dist = 0.0
     def_dur = 0.0 # Will render as empty string or "00:00:00"
     def_hr = 0
