@@ -20,12 +20,12 @@ except ImportError:
 # --- Configuration & Styling ---
 st.set_page_config(
     page_title="RunLog Hub",
-    page_icon=":material/sprint:",
+    page_icon=":material/landscape:",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS
+# Custom CSS - Autumn/Nature Theme
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
@@ -33,11 +33,11 @@ st.markdown("""
 
     html, body, [class*="css"] {
         font-family: 'Inter', sans-serif;
-        color: #1e293b;
+        color: #44403c; /* Warm Stone 700 */
     }
 
     .stApp {
-        background-color: #f8fafc;
+        background-color: #fafaf9; /* Warm Stone 50 */
     }
 
     /* Material Icon Class for HTML usage */
@@ -45,7 +45,7 @@ st.markdown("""
         font-family: 'Material Symbols Rounded';
         font-weight: normal;
         font-style: normal;
-        font-size: 1.2rem;
+        font-size: 1.1rem;
         line-height: 1;
         letter-spacing: normal;
         text-transform: none;
@@ -54,14 +54,14 @@ st.markdown("""
         word-wrap: normal;
         direction: ltr;
         vertical-align: middle;
-        color: #64748b;
+        color: #78716c; /* Warm Stone 500 */
     }
 
     /* Headers */
     h1, h2, h3 {
         font-weight: 800 !important;
         letter-spacing: -0.025em;
-        color: #0f172a;
+        color: #292524; /* Warm Stone 800 */
     }
 
     /* Modern Cards/Containers */
@@ -69,8 +69,8 @@ st.markdown("""
         background-color: #ffffff;
         padding: 1.5rem;
         border-radius: 1rem;
-        box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05), 0 2px 4px -2px rgb(0 0 0 / 0.05);
-        border: none;
+        box-shadow: 0 4px 6px -1px rgba(68, 64, 60, 0.05), 0 2px 4px -2px rgba(68, 64, 60, 0.05);
+        border: 1px solid #f5f5f4;
         transition: box-shadow 0.2s ease-in-out, transform 0.2s ease-in-out;
     }
     
@@ -79,22 +79,22 @@ st.markdown("""
         background-color: #ffffff;
         padding: 1.25rem;
         border-radius: 0.75rem;
-        border: 1px solid #e2e8f0; /* Slightly darker border for better visibility */
+        border: 1px solid #e7e5e4; /* Warm Stone 200 */
         margin-bottom: 1.0rem;
-        box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.05);
+        box-shadow: 0 1px 2px 0 rgba(68, 64, 60, 0.05);
     }
 
     /* Metrics Styling */
     [data-testid="stMetricValue"] {
         font-size: 1.8rem;
         font-weight: 800;
-        color: #0f172a;
+        color: #44403c; /* Warm Stone 700 */
         letter-spacing: -0.02em;
     }
     [data-testid="stMetricLabel"] {
         font-size: 0.75rem;
         font-weight: 600;
-        color: #64748b;
+        color: #a8a29e; /* Warm Stone 400 */
         text-transform: uppercase;
         letter-spacing: 0.05em;
     }
@@ -103,26 +103,27 @@ st.markdown("""
     .history-label {
         font-size: 0.7rem;
         text-transform: uppercase;
-        color: #94a3b8;
+        color: #a8a29e;
         font-weight: 600;
         margin-bottom: 0px;
     }
     .history-value {
         font-size: 1rem;
         font-weight: 600;
-        color: #334155;
+        color: #57534e; /* Warm Stone 600 */
     }
     .history-sub {
         font-size: 0.85rem;
-        color: #64748b;
+        color: #78716c;
     }
 
     /* Inputs and Selects */
     .stTextInput input, .stNumberInput input, .stSelectbox select, .stDateInput input, .stTextArea textarea {
         border-radius: 8px;
-        border: 1px solid #e2e8f0;
+        border: 1px solid #e7e5e4;
         padding: 0.75rem;
         background-color: #fff;
+        color: #44403c;
     }
     
     /* Buttons */
@@ -130,25 +131,34 @@ st.markdown("""
         border-radius: 8px;
         font-weight: 500;
         padding: 0.4rem 0.8rem;
-        border: none;
+        border: 1px solid #e7e5e4;
+        background-color: #ffffff;
+        color: #57534e;
         transition: all 0.2s;
     }
-    /* Primary form submit buttons */
+    .stButton button:hover {
+        border-color: #c2410c;
+        color: #c2410c;
+        background-color: #fff7ed;
+    }
+
+    /* Primary form submit buttons (Rust Color) */
     [data-testid="stFormSubmitButton"] button {
-        background-color: #0f172a;
+        background-color: #c2410c; /* Rust */
         color: white;
         padding: 0.6rem 1.2rem;
-        width: 100%; /* Full width for mobile friendliness */
+        width: 100%; 
+        border: none;
     }
     [data-testid="stFormSubmitButton"] button:hover {
-        background-color: #1e293b;
-        box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+        background-color: #9a3412;
+        box-shadow: 0 4px 6px -1px rgba(194, 65, 12, 0.2);
     }
 
     /* Expander headers */
     .streamlit-expanderHeader {
         font-weight: 600;
-        color: #334155;
+        color: #44403c;
         border-radius: 8px;
         background-color: #ffffff;
     }
@@ -176,7 +186,7 @@ st.markdown("""
         }
     }
     
-    /* Status Badges */
+    /* Status Badges - Nature Tones */
     .status-badge {
         padding: 4px 12px;
         border-radius: 20px;
@@ -184,17 +194,17 @@ st.markdown("""
         font-size: 0.8rem;
         display: inline-block;
     }
-    .status-red { background-color: #fee2e2; color: #991b1b; }
-    .status-orange { background-color: #ffedd5; color: #9a3412; }
-    .status-green { background-color: #dcfce7; color: #166534; }
-    .status-gray { background-color: #f1f5f9; color: #475569; }
+    .status-red { background-color: #fecaca; color: #991b1b; } /* Soft Red */
+    .status-orange { background-color: #ffedd5; color: #c2410c; } /* Soft Rust */
+    .status-green { background-color: #dcfce7; color: #166534; } /* Soft Forest */
+    .status-gray { background-color: #f5f5f4; color: #78716c; } /* Soft Stone */
     
     /* Daily Target Card */
     .daily-target {
         background-color: #ffffff;
         border-radius: 12px;
         padding: 1.5rem;
-        border: 1px solid #e2e8f0;
+        border: 1px solid #e7e5e4;
         margin-top: 1rem;
     }
     .target-header {
@@ -208,7 +218,7 @@ st.markdown("""
     .target-load {
         font-size: 1.2rem;
         font-weight: 700;
-        color: #0f172a;
+        color: #c2410c; /* Rust */
         margin: 0.5rem 0;
     }
     
@@ -216,7 +226,7 @@ st.markdown("""
     .load-bar-container {
         position: relative;
         height: 24px;
-        background-color: #f1f5f9;
+        background-color: #f5f5f4;
         border-radius: 12px;
         margin-bottom: 8px;
         margin-top: 4px;
@@ -231,7 +241,7 @@ st.markdown("""
     .load-bar-target {
         position: absolute;
         height: 100%;
-        border: 2px solid #1e293b;
+        border: 2px solid #44403c;
         border-radius: 12px;
         top: 0;
         pointer-events: none;
@@ -240,7 +250,7 @@ st.markdown("""
     .load-label {
         font-size: 0.75rem;
         font-weight: 600;
-        color: #475569;
+        color: #78716c;
         margin-bottom: 2px;
         display: flex;
         justify-content: space-between;
@@ -263,10 +273,31 @@ class PhysiologyEngine:
         self.gender = user_profile.get('gender', 'Male').lower()
         self.zones = user_profile.get('zones', {})
 
+    def classify_activity_load(self, load, avg_hr, zones):
+        """
+        Classifies a session's load into Anaerobic, High Aerobic, or Low Aerobic.
+        """
+        # Get thresholds
+        z4_upper = float(self.zones.get('z4_u', 175))
+        
+        # Zones list is [z1, z2, z3, z4, z5] in minutes
+        time_z5 = zones[4] if len(zones) > 4 else 0
+        time_z4 = zones[3] if len(zones) > 3 else 0
+        
+        # Anaerobic Check
+        if time_z5 > 5 or (avg_hr > z4_upper):
+            return "anaerobic"
+        
+        # High Aerobic Check
+        if time_z4 > 10:
+            return "high"
+            
+        # Default to Low Aerobic
+        return "low"
+
     def calculate_trimp(self, duration_min, avg_hr=None, zones=None):
         """
-        Calculates Training Impulse (TRIMP) using Banister's formula.
-        Splits load into buckets based on zone intensity.
+        Calculates Training Impulse (TRIMP).
         """
         load = 0.0
         focus_scores = {'low': 0, 'high': 0, 'anaerobic': 0}
@@ -287,30 +318,17 @@ class PhysiologyEngine:
                 avg_zone_hr = midpoints[i]
                 hr_reserve = max(0.0, min(1.0, (avg_zone_hr - self.hr_rest) / (self.hr_max - self.hr_rest)))
                 segment_load = duration * hr_reserve * 0.64 * math.exp(exponent * hr_reserve)
-                
                 load += segment_load
-                
-                # Classify Focus - Split logic
-                if i <= 1: # Z1, Z2
-                    focus_scores['low'] += segment_load
-                elif i <= 3: # Z3, Z4
-                    focus_scores['high'] += segment_load
-                else: # Z5
-                    focus_scores['anaerobic'] += segment_load
                 
         elif avg_hr and avg_hr > 0:
             # Basic Banister
             hr_reserve = max(0.0, min(1.0, (avg_hr - self.hr_rest) / (self.hr_max - self.hr_rest)))
             exponent = 1.92 if self.gender == 'male' else 1.67
             load = duration_min * hr_reserve * 0.64 * math.exp(exponent * hr_reserve)
-            
-            # Estimate focus based on Avg HR against Zone 2/4 boundaries
-            z2_upper = float(self.zones.get('z2_u', 145))
-            z4_upper = float(self.zones.get('z4_u', 175))
-            
-            if avg_hr > z4_upper: focus_scores['anaerobic'] = load
-            elif avg_hr > z2_upper: focus_scores['high'] = load
-            else: focus_scores['low'] = load
+
+        # --- CLASSIFICATION STEP ---
+        focus_type = self.classify_activity_load(load, avg_hr if avg_hr else 0, zones if zones else [0,0,0,0,0])
+        focus_scores[focus_type] = load
             
         return load, focus_scores
 
@@ -321,37 +339,31 @@ class PhysiologyEngine:
         diff = current_rhr - self.hr_rest
         
         if diff < -2:
-            # RHR is lower than baseline -> High Readiness
             return {
                 "readiness": "High",
                 "recommendation": "Go Hard / Interval Day",
                 "target_load": "Heavy (e.g., Threshold or 90m+ Long Run)",
                 "message": "Green light. Your system is primed for high intensity.",
-                "color": "#22c55e" # Green
+                "color": "#65a30d" # Olive Green
             }
         elif diff > 5:
-            # RHR is significantly higher -> Low Readiness
             return {
                 "readiness": "Low",
                 "recommendation": "Active Recovery / Rest",
                 "target_load": "Recovery (e.g., 30m easy jog or Rest)",
                 "message": "Red light. Focus on sleep and mobility today.",
-                "color": "#ef4444" # Red
+                "color": "#be123c" # Berry Red
             }
         else:
-            # Moderate Readiness
             return {
                 "readiness": "Moderate",
                 "recommendation": "Steady State / Base Miles",
                 "target_load": "Maintenance (e.g., 45-60m Aerobic Z2)",
                 "message": "Train, but keep it controlled. Don't dig a hole.",
-                "color": "#f97316" # Orange
+                "color": "#ea580c" # Burnt Orange
             }
 
     def get_training_effect(self, trimp_score):
-        """
-        Scales raw TRIMP to a 0.0-5.0 Training Effect score based on VO2 Max.
-        """
         scaling_factor = self.vo2_max * 1.5
         if scaling_factor == 0: return 0.0, "None"
         
@@ -374,40 +386,31 @@ class PhysiologyEngine:
         return "Extreme"
 
     def calculate_training_status(self, activity_history):
-        """
-        Calculates Acute:Chronic Workload Ratio (ACWR) and Status.
-        activity_history: list of dicts with {'date': 'YYYY-MM-DD', 'load': float, 'focus_type': str}
-        """
         today = datetime.now().date()
-        
-        acute_start = today - timedelta(days=6) # Last 7 days
-        chronic_start = today - timedelta(days=27) # Last 28 days
+        acute_start = today - timedelta(days=6)
+        chronic_start = today - timedelta(days=27)
         
         acute_load = 0
         chronic_load_total = 0
-        
-        # Bucket Accumulation (Chronic 4-week window)
-        buckets = {'low': 0, 'high': 0, 'anaerobic': 0}
+        bucket_totals = {'low': 0, 'high': 0, 'anaerobic': 0}
         
         for activity in activity_history:
             act_date = datetime.strptime(activity['date'], '%Y-%m-%d').date()
             load = activity.get('load', 0)
-            focus = activity.get('focus', {}) # This is now {type: total_load, others: 0}
+            focus = activity.get('focus', {})
             
             if acute_start <= act_date <= today:
                 acute_load += load
                 
             if chronic_start <= act_date <= today:
                 chronic_load_total += load
-                # Accumulate buckets based on the focus dict
-                buckets['low'] += focus.get('low', 0)
-                buckets['high'] += focus.get('high', 0)
-                buckets['anaerobic'] += focus.get('anaerobic', 0)
+                bucket_totals['low'] += focus.get('low', 0)
+                bucket_totals['high'] += focus.get('high', 0)
+                bucket_totals['anaerobic'] += focus.get('anaerobic', 0)
         
         chronic_load_weekly = chronic_load_total / 4.0 if chronic_load_total > 0 else 1.0
         ratio = acute_load / chronic_load_weekly
         
-        # Status Logic
         status = "Recovery"
         color_class = "status-gray"
         description = "Load is very low."
@@ -438,17 +441,16 @@ class PhysiologyEngine:
         total_chronic = chronic_load_total
         targets = {
             'low': {'min': total_chronic * 0.70, 'max': total_chronic * 0.90},
-            'high': {'min': total_chronic * 0.10, 'max': total_chronic * 0.25}, # widened slightly for flexibility
+            'high': {'min': total_chronic * 0.10, 'max': total_chronic * 0.25},
             'anaerobic': {'min': total_chronic * 0.0, 'max': total_chronic * 0.10}
         }
         
-        # Determine Shortages
         feedback = "Balanced! Well done."
         if buckets['low'] < targets['low']['min']:
             feedback = "Shortage: Low Aerobic. You need more easy base miles."
         elif buckets['high'] < targets['high']['min']:
              feedback = "Shortage: High Aerobic. Try a Tempo or Threshold run."
-        elif buckets['anaerobic'] < targets['anaerobic']['min'] and total_chronic > 500: # Only suggest anaerobic if base exists
+        elif buckets['anaerobic'] < targets['anaerobic']['min'] and total_chronic > 500:
              feedback = "Shortage: Anaerobic. Try some sprints or hill repeats."
         elif buckets['low'] > targets['low']['max']:
              feedback = "Focus: High Volume of Easy work detected."
@@ -477,12 +479,10 @@ DEFAULT_DATA = {
         {"id": 1, "name": "Leg Day", "exercises": ["Squats", "Split Squats", "Glute Bridges", "Calf Raises"]},
         {"id": 2, "name": "Upper Body", "exercises": ["Bench Press", "Pull Ups", "Overhead Press", "Rows"]}
     ],
-    # Enhanced User Profile Defaults
     "user_profile": {
         "age": 30, "height": 175, "weight": 70, "heightUnit": "cm", "weightUnit": "kg",
         "gender": "Male", "hrMax": 190, "hrRest": 60, "vo2Max": 45,
         "monthAvgRHR": 60, "monthAvgHRV": 40,
-        # Default Zones
         "zones": {
             "z1_u": 130, 
             "z2_l": 131, "z2_u": 145,
@@ -501,12 +501,10 @@ def load_data():
     try:
         with open(DATA_FILE, 'r') as f:
             data = json.load(f)
-            # Migration: Ensure new profile fields exist
             if 'gender' not in data.get('user_profile', {}):
                 data['user_profile'].update({"gender": "Male", "hrMax": 190, "hrRest": 60, "vo2Max": 45})
             if 'monthAvgRHR' not in data.get('user_profile', {}):
                 data['user_profile'].update({"monthAvgRHR": 60, "monthAvgHRV": 40})
-            # Migration for zones
             if 'zones' not in data.get('user_profile', {}) or 'z1_u' not in data.get('user_profile', {}).get('zones', {}):
                 data['user_profile']['zones'] = {
                     "z1_u": 130, 
@@ -599,7 +597,6 @@ def generate_report(start_date, end_date, selected_cats):
     report = [f"📊 **Training & Physio Report**"]
     report.append(f"📅 {start_date.strftime('%b %d')} - {end_date.strftime('%b %d')}\n")
     
-    # Calculate Physio Stats for context
     engine = PhysiologyEngine(st.session_state.data['user_profile'])
     
     # 1. FIELD ACTIVITIES & LOAD
@@ -607,13 +604,11 @@ def generate_report(start_date, end_date, selected_cats):
     
     if field_types:
         runs = st.session_state.data['runs']
-        # Filter by date and type
         period_runs = [
             r for r in runs 
             if start_date <= datetime.strptime(r['date'], '%Y-%m-%d').date() <= end_date
             and r['type'] in field_types
         ]
-        # Sort by date
         period_runs.sort(key=lambda x: x['date'])
         
         if period_runs:
@@ -625,16 +620,13 @@ def generate_report(start_date, end_date, selected_cats):
             report.append("")
             
             for r in period_runs:
-                # Calculate Physio metrics on fly for report
                 zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
                 trimp, focus = engine.calculate_trimp(float(r['duration']), int(r['avgHr']), zones)
-                # Find dominant focus type
                 focus_type = max(focus, key=focus.get) if focus else "low"
                 te, te_label = engine.get_training_effect(trimp)
                 
                 line = f"- {r['date'][5:]}: {r['type']} {r['distance']}km @ {format_duration(r['duration'])}"
                 
-                # Metrics Line
                 metrics = []
                 if r['distance'] > 0 and r['type'] != 'Ultimate': metrics.append(f"{format_pace(r['duration']/r['distance'])}/km")
                 if r['avgHr'] > 0: metrics.append(f"{r['avgHr']}bpm")
@@ -642,14 +634,10 @@ def generate_report(start_date, end_date, selected_cats):
                 line += f" ({', '.join(metrics)})" if metrics else ""
                 
                 report.append(line)
-                
-                # Physio & Feel
                 physio_info = f"   Load: {int(trimp)} ({focus_type.title()}) | TE: {te} {te_label}"
                 if r.get('rpe'): physio_info += f" | RPE: {r['rpe']}"
                 if r.get('feel'): physio_info += f" | Feel: {r['feel']}"
                 report.append(physio_info)
-                
-                # Notes
                 if r.get('notes'): report.append(f"   📝 {r['notes']}")
             report.append("")
     
@@ -670,7 +658,7 @@ def generate_report(start_date, end_date, selected_cats):
     if "Stats" in selected_cats:
         stats = st.session_state.data['health_logs']
         period_stats = [s for s in stats if start_date <= datetime.strptime(s['date'], '%Y-%m-%d').date() <= end_date]
-        period_stats.sort(key=lambda x: x['date']) # Sort chronologically
+        period_stats.sort(key=lambda x: x['date'])
         
         if period_stats:
             report.append(f"❤️ **HEALTH LOG**")
@@ -682,15 +670,13 @@ def generate_report(start_date, end_date, selected_cats):
                 sleep_dec = s.get('sleepHours', 0)
                 sleep_str = format_sleep(sleep_dec)
                 
-                # Determine readiness for this day based on CURRENT profile baseline
                 daily_target = engine.get_daily_target(rhr)
                 readiness = daily_target['readiness']
                 
                 report.append(f"- {date_str}: Sleep: {sleep_str} | HRV: {hrv} | RHR: {rhr} | Readiness: {readiness}")
             report.append("")
 
-    # 4. TRAINING STATUS SNAPSHOT (Based on End Date)
-    # Need full history for calculation
+    # 4. TRAINING STATUS SNAPSHOT
     all_runs = st.session_state.data['runs']
     history_data = []
     for r in all_runs:
@@ -698,7 +684,6 @@ def generate_report(start_date, end_date, selected_cats):
         trimp, focus = engine.calculate_trimp(float(r['duration']), int(r['avgHr']), zones)
         history_data.append({'date': r['date'], 'load': trimp, 'focus': focus})
     
-    # Calculate status
     status = engine.calculate_training_status(history_data)
     
     report.append(f"📈 **CURRENT STATUS**")
@@ -711,7 +696,6 @@ def generate_report(start_date, end_date, selected_cats):
     return "\n".join(report)
 
 def parse_imported_word_data(docx_file):
-    # Import logic removed/not needed per request but kept stub for safety if called
     return 0, "Feature disabled"
 
 # --- Sidebar Navigation ---
@@ -809,10 +793,10 @@ if selected_tab == "Training Status":
             with v4:
                 st.write("") # Spacer
                 col_e, col_d = st.columns(2)
-                if col_e.button("✏️", key=f"edit_m_{existing_log['id']}"):
+                if col_e.button(":material/edit:", key=f"edit_m_{existing_log['id']}"):
                     st.session_state.edit_morning_date = str(h_date)
                     st.rerun()
-                if col_d.button("🗑️", key=f"del_m_{existing_log['id']}"):
+                if col_d.button(":material/delete:", key=f"del_m_{existing_log['id']}"):
                     st.session_state.data['health_logs'] = [h for h in st.session_state.data['health_logs'] if h['id'] != existing_log['id']]
                     persist()
                     st.rerun()
