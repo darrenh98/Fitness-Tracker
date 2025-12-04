@@ -8,7 +8,14 @@ from datetime import datetime, timedelta, date
 import time
 import copy
 import re
+import math
 import streamlit.components.v1 as components
+
+# Try to import docx, handle if not installed immediately
+try:
+    from docx import Document
+except ImportError:
+    Document = None
 
 # --- Configuration & Styling ---
 st.set_page_config(
@@ -168,8 +175,135 @@ st.markdown("""
             padding: 0.75rem;
         }
     }
+    
+    /* Status Badges */
+    .status-badge {
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-weight: 700;
+        font-size: 0.8rem;
+        display: inline-block;
+    }
+    .status-red { background-color: #fee2e2; color: #991b1b; }
+    .status-orange { background-color: #ffedd5; color: #9a3412; }
+    .status-green { background-color: #dcfce7; color: #166534; }
+    .status-gray { background-color: #f1f5f9; color: #475569; }
 </style>
 """, unsafe_allow_html=True)
+
+# --- Physiology Engine ---
+class PhysiologyEngine:
+    def __init__(self, user_profile):
+        """
+        Initialize with user object containing:
+        hr_max, hr_rest, vo2_max, gender ('male'/'female')
+        """
+        self.hr_max = float(user_profile.get('hrMax', 190))
+        self.hr_rest = float(user_profile.get('hrRest', 60))
+        self.vo2_max = float(user_profile.get('vo2Max', 45))
+        self.gender = user_profile.get('gender', 'Male').lower()
+
+    def calculate_trimp(self, duration_min, avg_hr=None, zones=None):
+        """
+        Calculates Training Impulse (TRIMP) using Banister's formula.
+        Fallback to Zone-based load if Avg HR is missing.
+        """
+        if avg_hr and avg_hr > 0:
+            # Banister's Impulse Response
+            hr_reserve = (avg_hr - self.hr_rest) / (self.hr_max - self.hr_rest)
+            # Clamp reserve between 0 and 1 for safety
+            hr_reserve = max(0.0, min(1.0, hr_reserve))
+            
+            exponent = 1.92 if self.gender == 'male' else 1.67
+            trimp = duration_min * hr_reserve * 0.64 * math.exp(exponent * hr_reserve)
+            return trimp
+        
+        elif zones:
+            # Fallback: Zone Multipliers
+            # Zones input expected as list of minutes [z1, z2, z3, z4, z5]
+            multipliers = [0.8, 1.5, 2.8, 4.5, 7.0]
+            load = sum(z * m for z, m in zip(zones, multipliers))
+            return load
+        
+        return 0.0
+
+    def get_training_effect(self, trimp_score):
+        """
+        Scales raw TRIMP to a 0.0-5.0 Training Effect score based on VO2 Max.
+        """
+        # Scaling factor: Higher VO2 max needs more load to get same effect
+        # Using approximation: scaling ~ vo2_max * 1.5
+        scaling_factor = self.vo2_max * 1.5
+        if scaling_factor == 0: return 0.0
+        
+        te = trimp_score / scaling_factor
+        return round(min(5.0, te), 1)
+
+    def calculate_training_status(self, activity_history):
+        """
+        Calculates Acute:Chronic Workload Ratio (ACWR) and Status.
+        activity_history: list of dicts with {'date': 'YYYY-MM-DD', 'load': float}
+        """
+        today = datetime.now().date()
+        
+        # Setup date buckets
+        acute_start = today - timedelta(days=6) # Last 7 days
+        chronic_start = today - timedelta(days=27) # Last 28 days
+        
+        acute_load = 0
+        chronic_load_total = 0
+        
+        for activity in activity_history:
+            act_date = datetime.strptime(activity['date'], '%Y-%m-%d').date()
+            load = activity.get('load', 0)
+            
+            if acute_start <= act_date <= today:
+                acute_load += load
+                
+            if chronic_start <= act_date <= today:
+                chronic_load_total += load
+        
+        # Chronic Load is normalized to a weekly view (Total / 4)
+        chronic_load_weekly = chronic_load_total / 4.0 if chronic_load_total > 0 else 1.0 # Avoid div/0
+        
+        ratio = acute_load / chronic_load_weekly
+        
+        # Status Logic
+        status = "Recovery"
+        color_class = "status-gray"
+        description = "Load is very low. You are detraining or recovering."
+
+        if ratio > 1.5:
+            status = "Overreaching"
+            color_class = "status-red"
+            description = "High injury risk! Workload spike is too high."
+        elif 1.3 <= ratio <= 1.5:
+            status = "High Strain"
+            color_class = "status-orange"
+            description = "Caution: You are increasing load rapidly."
+        elif 0.8 <= ratio < 1.3:
+            if acute_load > chronic_load_weekly:
+                status = "Productive"
+                color_class = "status-green"
+                description = "Optimal zone. You are building fitness."
+            else:
+                status = "Maintaining"
+                color_class = "status-green"
+                description = "Load is consistent. Fitness is stable."
+        else:
+            # < 0.8
+            status = "Recovery / Detraining"
+            color_class = "status-gray"
+            description = "Workload is decreasing. Good for taper weeks."
+
+        return {
+            "acute": round(acute_load),
+            "chronic": round(chronic_load_weekly),
+            "ratio": round(ratio, 2),
+            "status": status,
+            "css": color_class,
+            "desc": description
+        }
 
 # --- Data Persistence Helper ---
 DATA_FILE = "run_tracker_data.json"
@@ -182,7 +316,11 @@ DEFAULT_DATA = {
         {"id": 1, "name": "Leg Day", "exercises": ["Squats", "Split Squats", "Glute Bridges", "Calf Raises"]},
         {"id": 2, "name": "Upper Body", "exercises": ["Bench Press", "Pull Ups", "Overhead Press", "Rows"]}
     ],
-    "user_profile": {"age": 30, "height": 175, "weight": 70, "heightUnit": "cm", "weightUnit": "kg"},
+    # Enhanced User Profile Defaults
+    "user_profile": {
+        "age": 30, "height": 175, "weight": 70, "heightUnit": "cm", "weightUnit": "kg",
+        "gender": "Male", "hrMax": 190, "hrRest": 60, "vo2Max": 45
+    },
     "cycles": {"macro": "", "meso": "", "micro": ""},
     "weekly_plan": {day: {"am": "", "pm": ""} for day in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']}
 }
@@ -193,6 +331,12 @@ def load_data():
     try:
         with open(DATA_FILE, 'r') as f:
             data = json.load(f)
+            # Migration: Ensure new profile fields exist
+            if 'gender' not in data.get('user_profile', {}):
+                data['user_profile']['gender'] = "Male"
+                data['user_profile']['hrMax'] = 190
+                data['user_profile']['hrRest'] = 60
+                data['user_profile']['vo2Max'] = 45
             return data
     except:
         return DEFAULT_DATA
@@ -268,11 +412,13 @@ def generate_report(start_date, end_date, selected_cats):
     
     if field_types:
         runs = st.session_state.data['runs']
+        # Filter by date and type
         period_runs = [
             r for r in runs 
             if start_date <= datetime.strptime(r['date'], '%Y-%m-%d').date() <= end_date
             and r['type'] in field_types
         ]
+        # Sort by date
         period_runs.sort(key=lambda x: x['date'])
         
         if period_runs:
@@ -311,6 +457,7 @@ def generate_report(start_date, end_date, selected_cats):
         gyms = st.session_state.data['gym_sessions']
         period_gyms = [g for g in gyms if start_date <= datetime.strptime(g['date'], '%Y-%m-%d').date() <= end_date]
         period_gyms.sort(key=lambda x: x['date'])
+        
         if period_gyms:
             report.append(f"💪 **GYM ({len(period_gyms)})**")
             for g in period_gyms:
@@ -324,10 +471,12 @@ def generate_report(start_date, end_date, selected_cats):
     if "Stats" in selected_cats:
         stats = st.session_state.data['health_logs']
         period_stats = [s for s in stats if start_date <= datetime.strptime(s['date'], '%Y-%m-%d').date() <= end_date]
+        
         if period_stats:
             avg_rhr = sum(s['rhr'] for s in period_stats) / len(period_stats)
             avg_hrv = sum(s['hrv'] for s in period_stats) / len(period_stats)
             avg_sleep = sum(s['sleepHours'] for s in period_stats) / len(period_stats)
+            
             report.append(f"❤️ **RECOVERY (Avg)**")
             report.append(f"Sleep: {avg_sleep:.1f}h | HRV: {int(avg_hrv)} | RHR: {int(avg_rhr)}")
 
@@ -336,18 +485,30 @@ def generate_report(start_date, end_date, selected_cats):
 # --- Sidebar Navigation ---
 with st.sidebar:
     st.title(":material/sprint: RunLog Hub")
-    # Removed Import from navigation
-    selected_tab = st.radio("Navigate", ["Plan", "Field (Runs)", "Gym", "Stats", "Trends", "Share"], label_visibility="collapsed")
+    # Renamed "Stats" to "Physio" to reflect advanced dashboard
+    selected_tab = st.radio("Navigate", ["Plan", "Field (Runs)", "Gym", "Physio", "Trends", "Share"], label_visibility="collapsed")
     st.divider()
     
     with st.expander("👤 Athlete Profile"):
         prof = st.session_state.data['user_profile']
+        
+        # Basic
         c1, c2 = st.columns(2)
         new_weight = c1.number_input("Weight (kg)", value=float(prof.get('weight', 70)), key="prof_weight")
         new_height = c2.number_input("Height (cm)", value=float(prof.get('height', 175)), key="prof_height")
-        if c1.button("Save Profile"):
-            st.session_state.data['user_profile']['weight'] = new_weight
-            st.session_state.data['user_profile']['height'] = new_height
+        
+        # Physio Params
+        gender = st.selectbox("Gender", ["Male", "Female"], index=0 if prof.get('gender','Male') == 'Male' else 1)
+        c3, c4, c5 = st.columns(3)
+        hr_max = c3.number_input("Max HR", value=int(prof.get('hrMax', 190)))
+        hr_rest = c4.number_input("Rest HR", value=int(prof.get('hrRest', 60)))
+        vo2 = c5.number_input("VO2 Max", value=float(prof.get('vo2Max', 45)))
+
+        if st.button("Save Profile"):
+            st.session_state.data['user_profile'].update({
+                'weight': new_weight, 'height': new_height, 'gender': gender,
+                'hrMax': hr_max, 'hrRest': hr_rest, 'vo2Max': vo2
+            })
             persist()
             st.success("Saved!")
 
@@ -441,8 +602,6 @@ elif selected_tab == "Field (Runs)":
     expander_state = True if edit_run_id else False
 
     with st.expander(form_label, expanded=expander_state):
-        # Removed Template Loading Logic
-
         # Dynamic key suffix to ensure fresh form state when switching between entries or modes
         key_suffix = f"{edit_run_id}" if edit_run_id else "new"
 
@@ -529,7 +688,7 @@ elif selected_tab == "Field (Runs)":
                 
                 persist()
                 st.rerun()
-                
+        
         if edit_run_id:
             if st.button("Cancel Edit"):
                 st.session_state.edit_run_id = None
@@ -654,8 +813,6 @@ elif selected_tab == "Field (Runs)":
 
             if not filtered_df.empty:
                 # Sort Chronologically: Latest First
-                # Convert date strings to datetime objects for sorting (if not already handled by dataframe, but safer here)
-                # We created dt_obj earlier, use that
                 filtered_df = filtered_df.sort_values(by='dt_obj', ascending=False)
 
                 for idx, row in filtered_df.iterrows():
@@ -973,95 +1130,113 @@ elif selected_tab == "Gym":
             st.session_state.gym_save_dialog = False
             st.rerun()
 
-# --- TAB: STATS (HEALTH) ---
-elif selected_tab == "Stats":
-    st.header(":material/favorite: Physiological Stats")
-    edit_hlth_id = st.session_state.get('edit_hlth_id', None)
-    def_h_date, def_rhr, def_hrv, def_vo2, def_sleep = datetime.now(), 60, 0, 0.0, 0.0
-    if edit_hlth_id:
-        h_data = next((h for h in st.session_state.data['health_logs'] if h['id'] == edit_hlth_id), None)
-        if h_data:
-            def_h_date = datetime.strptime(h_data['date'], '%Y-%m-%d').date()
-            def_rhr = h_data['rhr']
-            def_hrv = h_data['hrv']
-            def_vo2 = h_data['vo2Max']
-            def_sleep = h_data['sleepHours']
-
-    lbl_h = ":material/edit: Edit Stats" if edit_hlth_id else ":material/add_circle: Log Health Stats"
-    expanded_h = True if edit_hlth_id else False
-
-    with st.expander(lbl_h, expanded=expanded_h):
-        with st.form("health_form"):
-            h_date = st.date_input("Date", def_h_date)
-            c1, c2 = st.columns(2)
-            rhr = c1.number_input("Resting HR", min_value=30, max_value=150, value=int(def_rhr))
-            hrv = c2.number_input("HRV (ms)", min_value=0, value=int(def_hrv))
-            c3, c4 = st.columns(2)
-            vo2 = c3.number_input("VO2 Max", min_value=0.0, value=float(def_vo2), step=0.1)
-            sleep = c4.number_input("Sleep (hrs)", min_value=0.0, value=float(def_sleep), step=0.1)
-            btn_h_txt = "Update Stats" if edit_hlth_id else "Log Stats"
-            if st.form_submit_button(btn_h_txt):
-                new_h = {"id": edit_hlth_id if edit_hlth_id else int(time.time()), "date": str(h_date), "rhr": rhr, "hrv": hrv, "vo2Max": vo2, "sleepHours": sleep}
-                if edit_hlth_id:
-                     idx = next((i for i, h in enumerate(st.session_state.data['health_logs']) if h['id'] == edit_hlth_id), -1)
-                     if idx != -1: st.session_state.data['health_logs'][idx] = new_h
-                     st.session_state.edit_hlth_id = None
-                     st.success("Stats Updated!")
-                else:
-                    st.session_state.data['health_logs'].insert(0, new_h)
-                    st.success("Stats Logged!")
-                persist()
-                st.rerun()
-        if edit_hlth_id:
-            if st.button("Cancel Edit", key="cancel_h"):
-                st.session_state.edit_hlth_id = None
-                st.rerun()
-
-    health_df = pd.DataFrame(st.session_state.data['health_logs'])
-    if not health_df.empty:
-        health_df['date'] = pd.to_datetime(health_df['date'])
-        health_df = health_df.sort_values(by='date')
-        c1, c2 = st.columns(2)
-        with c1:
-            with st.container(border=True):
-                fig_hrv = px.line(health_df, x='date', y='hrv', title="HRV Trends", markers=True)
-                fig_hrv.update_traces(line_color='#22c55e')
-                fig_hrv.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_family="Inter", margin=dict(l=20, r=20, t=40, b=20), height=250)
-                st.plotly_chart(fig_hrv, use_container_width=True)
-        with c2:
-            with st.container(border=True):
-                fig_sleep = px.bar(health_df, x='date', y='sleepHours', title="Sleep Duration")
-                fig_sleep.update_traces(marker_color='#6366f1')
-                fig_sleep.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_family="Inter", margin=dict(l=20, r=20, t=40, b=20), height=250)
-                st.plotly_chart(fig_sleep, use_container_width=True)
+# --- TAB: PHYSIO (UPDATED) ---
+elif selected_tab == "Physio":
+    st.header(":material/monitor_heart: Physiological Status")
+    
+    # Initialize Engine
+    engine = PhysiologyEngine(st.session_state.data['user_profile'])
+    
+    # Calculate Metrics for History
+    history_data = []
+    runs = st.session_state.data['runs']
+    for r in runs:
+        # Prepare Zones list
+        zones = [
+            float(r.get('z1', 0)), float(r.get('z2', 0)), 
+            float(r.get('z3', 0)), float(r.get('z4', 0)), 
+            float(r.get('z5', 0))
+        ]
         
-        st.divider()
-        st.subheader("History")
-        list_h_df = health_df.sort_values(by='date', ascending=False)
-        for index, row in list_h_df.iterrows():
-             with st.container():
-                 # Mobile Optimized 3-col layout
-                 hc1, hc2, hc3 = st.columns([2, 4, 1.5])
-                 hc1.markdown(f"**{row['date'].date()}**")
-                 stats_str = f"""
-                 <div style="line-height:1.4;">
-                    <span class="history-sub">RHR:</span> <b>{row['rhr']}</b> &nbsp; 
-                    <span class="history-sub">HRV:</span> <b>{row['hrv']}</b><br>
-                    <span class="history-sub">VO2:</span> <b>{row['vo2Max']}</b> &nbsp;
-                    <span class="history-sub">Sleep:</span> <b>{row['sleepHours']}h</b>
-                 </div>
-                 """
-                 hc2.markdown(stats_str, unsafe_allow_html=True)
-                 with hc3:
-                    if st.button(":material/edit:", key=f"edit_h_{row['id']}"):
-                        st.session_state.edit_hlth_id = row['id']
-                        st.rerun()
-                    if st.button(":material/delete:", key=f"del_h_{row['id']}"):
-                        st.session_state.data['health_logs'] = [x for x in st.session_state.data['health_logs'] if x['id'] != row['id']]
-                        persist()
-                        st.rerun()
+        trimp = engine.calculate_trimp(
+            duration_min=float(r['duration']),
+            avg_hr=int(r['avgHr']),
+            zones=zones
+        )
+        
+        te = engine.get_training_effect(trimp)
+        
+        history_data.append({
+            'date': r['date'],
+            'load': trimp,
+            'te': te,
+            'type': r['type'],
+            'dist': r['distance']
+        })
+        
+    # Calculate Status
+    status_data = engine.calculate_training_status(history_data)
+    
+    # --- DASHBOARD UI ---
+    
+    # 1. Status Card
+    with st.container(border=True):
+        st.subheader("Training Status")
+        
+        sc1, sc2 = st.columns([3, 2])
+        
+        with sc1:
+            st.markdown(f"""
+            <div style="background-color: {status_data['css'] == 'status-green' and '#dcfce7' or status_data['css'] == 'status-red' and '#fee2e2' or status_data['css'] == 'status-orange' and '#ffedd5' or '#f1f5f9'}; 
+                        padding: 1rem; border-radius: 12px; border: 1px solid #e2e8f0;">
+                <h2 style="margin:0; color: #0f172a;">{status_data['status']}</h2>
+                <p style="margin:5px 0 0 0; color: #475569;">{status_data['desc']}</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+        with sc2:
+            ratio_val = status_data['ratio']
+            st.metric("Acute:Chronic Ratio", ratio_val, delta=None)
+            # Simple gauge visual
+            gauge_html = f"""
+            <div style="height: 10px; width: 100%; background: #e2e8f0; border-radius: 5px; margin-top: 10px; position: relative;">
+                <div style="height: 100%; width: {min(ratio_val/2.0 * 100, 100)}%; background: {'#22c55e' if 0.8 <= ratio_val <= 1.3 else '#ef4444' if ratio_val > 1.5 else '#f97316'}; border-radius: 5px;"></div>
+                <div style="position: absolute; top: -5px; left: 50%; height: 20px; width: 2px; background: black;"></div>
+            </div>
+            <div style="display: flex; justify-content: space-between; font-size: 0.7rem; color: #64748b;">
+                <span>0.0</span><span>1.0</span><span>2.0+</span>
+            </div>
+            """
+            st.markdown(gauge_html, unsafe_allow_html=True)
+
+    # 2. Load Details
+    c1, c2 = st.columns(2)
+    with c1:
+        st.metric("Acute Load (7d)", int(status_data['acute']))
+    with c2:
+        st.metric("Chronic Load (28d)", int(status_data['chronic']))
+
+    st.divider()
+    
+    # 3. Activity Analysis
+    st.subheader("Activity Analysis")
+    
+    if history_data:
+        # Convert to DF for display
+        df_phys = pd.DataFrame(history_data)
+        # Sort by date
+        df_phys = df_phys.sort_values(by='date', ascending=False).head(10)
+        
+        for i, row in df_phys.iterrows():
+            with st.container(border=True):
+                pc1, pc2, pc3, pc4 = st.columns([2, 2, 2, 2])
+                pc1.markdown(f"**{row['date']}**")
+                pc1.caption(row['type'])
+                
+                pc2.metric("TRIMP", int(row['load']))
+                pc3.metric("TE (0-5)", row['te'])
+                
+                # Visual TE bar
+                width_pct = min(row['te'] / 5.0 * 100, 100)
+                color = "#22c55e" if row['te'] < 3 else "#f59e0b" if row['te'] < 4 else "#ef4444"
+                pc4.markdown(f"""
+                <div style="margin-top: 15px; height: 8px; width: 100%; background: #f1f5f9; border-radius: 4px;">
+                    <div style="height: 100%; width: {width_pct}%; background: {color}; border-radius: 4px;"></div>
+                </div>
+                <div style="font-size: 0.7rem; color: #64748b; text-align: right;">Impact</div>
+                """, unsafe_allow_html=True)
     else:
-        st.info("No health stats logged yet.")
+        st.info("No activities found to analyze.")
 
 # --- TAB: TRENDS ---
 elif selected_tab == "Trends":
