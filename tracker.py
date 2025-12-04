@@ -197,11 +197,13 @@ class PhysiologyEngine:
         """
         Initialize with user object containing:
         hr_max, hr_rest, vo2_max, gender ('male'/'female')
+        zones: dict with keys 'z1', 'z2', 'z3', 'z4', 'z5' containing UPPER limits
         """
         self.hr_max = float(user_profile.get('hrMax', 190))
         self.hr_rest = float(user_profile.get('hrRest', 60))
         self.vo2_max = float(user_profile.get('vo2Max', 45))
         self.gender = user_profile.get('gender', 'Male').lower()
+        self.zones = user_profile.get('zones', {})
 
     def calculate_trimp(self, duration_min, avg_hr=None, zones=None):
         """
@@ -219,11 +221,45 @@ class PhysiologyEngine:
             return trimp
         
         elif zones:
-            # Fallback: Zone Multipliers
-            # Zones input expected as list of minutes [z1, z2, z3, z4, z5]
-            multipliers = [0.8, 1.5, 2.8, 4.5, 7.0]
-            load = sum(z * m for z, m in zip(zones, multipliers))
-            return load
+            # If user has defined accurate zone boundaries, use them for granular Banister calc
+            # Otherwise fallback to static multipliers
+            if self.zones and len(self.zones) == 5:
+                total_trimp = 0
+                # Assume Z1 starts at HR Rest. 
+                # We iterate through zones Z1 to Z5
+                prev_limit = self.hr_rest 
+                zone_keys = ['z1', 'z2', 'z3', 'z4', 'z5']
+                
+                for i, duration in enumerate(zones):
+                    if duration <= 0: continue
+                    
+                    key = zone_keys[i]
+                    upper = float(self.zones.get(key, 0))
+                    if upper == 0: continue 
+                    
+                    # Calculate Representative HR for this zone (Midpoint)
+                    avg_zone_hr = (prev_limit + upper) / 2
+                    
+                    # Calculate HR Reserve for this specific zone midpoint
+                    hr_reserve = (avg_zone_hr - self.hr_rest) / (self.hr_max - self.hr_rest)
+                    hr_reserve = max(0.0, min(1.0, hr_reserve))
+                    
+                    exponent = 1.92 if self.gender == 'male' else 1.67
+                    
+                    # Calculate Load for this segment
+                    segment_load = duration * hr_reserve * 0.64 * math.exp(exponent * hr_reserve)
+                    total_trimp += segment_load
+                    
+                    # Set lower bound for next zone
+                    prev_limit = upper
+                
+                return total_trimp
+            else:
+                # Fallback: Zone Multipliers (Standard approximations)
+                # Zones input expected as list of minutes [z1, z2, z3, z4, z5]
+                multipliers = [0.8, 1.5, 2.8, 4.5, 7.0]
+                load = sum(z * m for z, m in zip(zones, multipliers))
+                return load
         
         return 0.0
 
@@ -319,7 +355,8 @@ DEFAULT_DATA = {
     # Enhanced User Profile Defaults
     "user_profile": {
         "age": 30, "height": 175, "weight": 70, "heightUnit": "cm", "weightUnit": "kg",
-        "gender": "Male", "hrMax": 190, "hrRest": 60, "vo2Max": 45
+        "gender": "Male", "hrMax": 190, "hrRest": 60, "vo2Max": 45,
+        "zones": {"z1": 130, "z2": 145, "z3": 160, "z4": 175, "z5": 190} # Default Upper Limits
     },
     "cycles": {"macro": "", "meso": "", "micro": ""},
     "weekly_plan": {day: {"am": "", "pm": ""} for day in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']}
@@ -337,6 +374,8 @@ def load_data():
                 data['user_profile']['hrMax'] = 190
                 data['user_profile']['hrRest'] = 60
                 data['user_profile']['vo2Max'] = 45
+            if 'zones' not in data.get('user_profile', {}):
+                data['user_profile']['zones'] = {"z1": 130, "z2": 145, "z3": 160, "z4": 175, "z5": 190}
             return data
     except:
         return DEFAULT_DATA
@@ -463,8 +502,10 @@ def generate_report(start_date, end_date, selected_cats):
             for g in period_gyms:
                 vol = g.get('totalVolume', 0)
                 report.append(f"- {g['date'][5:]}: {g['routineName']} (Vol: {vol:.0f}kg)")
+                # List exercises briefly
                 ex_names = [e['name'] for e in g['exercises']]
-                if ex_names: report.append(f"   Exs: {', '.join(ex_names)}")
+                if ex_names:
+                    report.append(f"   Exs: {', '.join(ex_names)}")
             report.append("")
 
     # 3. STATS
@@ -504,10 +545,19 @@ with st.sidebar:
         hr_rest = c4.number_input("Rest HR", value=int(prof.get('hrRest', 60)))
         vo2 = c5.number_input("VO2 Max", value=float(prof.get('vo2Max', 45)))
 
+        st.markdown("**Heart Rate Zones (Upper Limits)**")
+        cz = prof.get('zones', {"z1": 130, "z2": 145, "z3": 160, "z4": 175, "z5": 190})
+        z1_u = st.number_input("Zone 1 Max", value=int(cz.get('z1', 130)))
+        z2_u = st.number_input("Zone 2 Max", value=int(cz.get('z2', 145)))
+        z3_u = st.number_input("Zone 3 Max", value=int(cz.get('z3', 160)))
+        z4_u = st.number_input("Zone 4 Max", value=int(cz.get('z4', 175)))
+        z5_u = st.number_input("Zone 5 Max", value=int(cz.get('z5', 190)))
+
         if st.button("Save Profile"):
             st.session_state.data['user_profile'].update({
                 'weight': new_weight, 'height': new_height, 'gender': gender,
-                'hrMax': hr_max, 'hrRest': hr_rest, 'vo2Max': vo2
+                'hrMax': hr_max, 'hrRest': hr_rest, 'vo2Max': vo2,
+                'zones': {"z1": z1_u, "z2": z2_u, "z3": z3_u, "z4": z4_u, "z5": z5_u}
             })
             persist()
             st.success("Saved!")
@@ -653,9 +703,11 @@ elif selected_tab == "Field (Runs)":
             z4 = rc4.text_input("Zone 4", value=def_z4, placeholder="00:00", key=f"z4_{key_suffix}")
             z5 = rc5.text_input("Zone 5", value=def_z5, placeholder="00:00", key=f"z5_{key_suffix}")
             
-            st.caption("How did it feel?")
-            feel_idx = ["Good", "Normal", "Tired", "Pain"].index(def_feel) if def_feel in ["Good", "Normal", "Tired", "Pain"] else 1
-            feel = st.radio("Feel", ["Good", "Normal", "Tired", "Pain"], index=feel_idx, horizontal=True, label_visibility="collapsed", key=f"feel_{key_suffix}")
+            c_feel, c_date = st.columns(2)
+            with c_feel:
+                st.caption("How did it feel?")
+                feel_idx = ["Good", "Normal", "Tired", "Pain"].index(def_feel) if def_feel in ["Good", "Normal", "Tired", "Pain"] else 1
+                feel = st.radio("Feel", ["Good", "Normal", "Tired", "Pain"], index=feel_idx, horizontal=True, label_visibility="collapsed", key=f"feel_{key_suffix}")
             
             st.caption("Notes")
             notes = st.text_area("Notes", value=def_notes, placeholder="Easy run, felt strong...", height=3, label_visibility="collapsed", key=f"notes_{key_suffix}")
@@ -1130,6 +1182,96 @@ elif selected_tab == "Gym":
             st.session_state.gym_save_dialog = False
             st.rerun()
 
+# --- TAB: STATS (HEALTH) ---
+elif selected_tab == "Stats":
+    st.header(":material/favorite: Physiological Stats")
+    edit_hlth_id = st.session_state.get('edit_hlth_id', None)
+    def_h_date, def_rhr, def_hrv, def_vo2, def_sleep = datetime.now(), 60, 0, 0.0, 0.0
+    if edit_hlth_id:
+        h_data = next((h for h in st.session_state.data['health_logs'] if h['id'] == edit_hlth_id), None)
+        if h_data:
+            def_h_date = datetime.strptime(h_data['date'], '%Y-%m-%d').date()
+            def_rhr = h_data['rhr']
+            def_hrv = h_data['hrv']
+            def_vo2 = h_data['vo2Max']
+            def_sleep = h_data['sleepHours']
+
+    lbl_h = ":material/edit: Edit Stats" if edit_hlth_id else ":material/add_circle: Log Health Stats"
+    expanded_h = True if edit_hlth_id else False
+
+    with st.expander(lbl_h, expanded=expanded_h):
+        with st.form("health_form"):
+            h_date = st.date_input("Date", def_h_date)
+            c1, c2 = st.columns(2)
+            rhr = c1.number_input("Resting HR", min_value=30, max_value=150, value=int(def_rhr))
+            hrv = c2.number_input("HRV (ms)", min_value=0, value=int(def_hrv))
+            c3, c4 = st.columns(2)
+            vo2 = c3.number_input("VO2 Max", min_value=0.0, value=float(def_vo2), step=0.1)
+            sleep = c4.number_input("Sleep (hrs)", min_value=0.0, value=float(def_sleep), step=0.1)
+            btn_h_txt = "Update Stats" if edit_hlth_id else "Log Stats"
+            if st.form_submit_button(btn_h_txt):
+                new_h = {"id": edit_hlth_id if edit_hlth_id else int(time.time()), "date": str(h_date), "rhr": rhr, "hrv": hrv, "vo2Max": vo2, "sleepHours": sleep}
+                if edit_hlth_id:
+                     idx = next((i for i, h in enumerate(st.session_state.data['health_logs']) if h['id'] == edit_hlth_id), -1)
+                     if idx != -1: st.session_state.data['health_logs'][idx] = new_h
+                     st.session_state.edit_hlth_id = None
+                     st.success("Stats Updated!")
+                else:
+                    st.session_state.data['health_logs'].insert(0, new_h)
+                    st.success("Stats Logged!")
+                persist()
+                st.rerun()
+        if edit_hlth_id:
+            if st.button("Cancel Edit", key="cancel_h"):
+                st.session_state.edit_hlth_id = None
+                st.rerun()
+
+    health_df = pd.DataFrame(st.session_state.data['health_logs'])
+    if not health_df.empty:
+        health_df['date'] = pd.to_datetime(health_df['date'])
+        health_df = health_df.sort_values(by='date')
+        c1, c2 = st.columns(2)
+        with c1:
+            with st.container(border=True):
+                fig_hrv = px.line(health_df, x='date', y='hrv', title="HRV Trends", markers=True)
+                fig_hrv.update_traces(line_color='#22c55e')
+                fig_hrv.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_family="Inter", margin=dict(l=20, r=20, t=40, b=20), height=250)
+                st.plotly_chart(fig_hrv, use_container_width=True)
+        with c2:
+            with st.container(border=True):
+                fig_sleep = px.bar(health_df, x='date', y='sleepHours', title="Sleep Duration")
+                fig_sleep.update_traces(marker_color='#6366f1')
+                fig_sleep.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font_family="Inter", margin=dict(l=20, r=20, t=40, b=20), height=250)
+                st.plotly_chart(fig_sleep, use_container_width=True)
+        
+        st.divider()
+        st.subheader("History")
+        list_h_df = health_df.sort_values(by='date', ascending=False)
+        for index, row in list_h_df.iterrows():
+             with st.container():
+                 # Mobile Optimized 3-col layout
+                 hc1, hc2, hc3 = st.columns([2, 4, 1.5])
+                 hc1.markdown(f"**{row['date'].date()}**")
+                 stats_str = f"""
+                 <div style="line-height:1.4;">
+                    <span class="history-sub">RHR:</span> <b>{row['rhr']}</b> &nbsp; 
+                    <span class="history-sub">HRV:</span> <b>{row['hrv']}</b><br>
+                    <span class="history-sub">VO2:</span> <b>{row['vo2Max']}</b> &nbsp;
+                    <span class="history-sub">Sleep:</span> <b>{row['sleepHours']}h</b>
+                 </div>
+                 """
+                 hc2.markdown(stats_str, unsafe_allow_html=True)
+                 with hc3:
+                    if st.button(":material/edit:", key=f"edit_h_{row['id']}"):
+                        st.session_state.edit_hlth_id = row['id']
+                        st.rerun()
+                    if st.button(":material/delete:", key=f"del_h_{row['id']}"):
+                        st.session_state.data['health_logs'] = [x for x in st.session_state.data['health_logs'] if x['id'] != row['id']]
+                        persist()
+                        st.rerun()
+    else:
+        st.info("No health stats logged yet.")
+
 # --- TAB: PHYSIO (UPDATED) ---
 elif selected_tab == "Physio":
     st.header(":material/monitor_heart: Physiological Status")
@@ -1318,19 +1460,3 @@ elif selected_tab == "Share":
         if st.button("📄 Generate Text Report", type="primary"):
             report_text = generate_report(start_r, end_r, st.session_state.share_cats)
             st.text_area("Copy this text:", value=report_text, height=400)
-
-# --- TAB: IMPORT ---
-elif selected_tab == "Import":
-    st.header(":material/upload_file: Import Data")
-    with st.container(border=True):
-        st.info("Upload a Word (.docx) file containing reports in the standard format (e.g., '- MM-DD: Type Dist @ Time').")
-        uploaded_file = st.file_uploader("Choose a Word file", type="docx")
-        if uploaded_file is not None:
-            if st.button("Process Import"):
-                count, error = parse_imported_word_data(uploaded_file)
-                if error: st.error(f"Error: {error}")
-                elif count > 0:
-                    st.success(f"Successfully imported {count} activities!")
-                    time.sleep(1)
-                    st.rerun()
-                else: st.warning("No matching activities found in the document.")
