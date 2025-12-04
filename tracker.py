@@ -157,6 +157,7 @@ class PhysiologyEngine:
             exponent = 1.92 if self.gender == 'male' else 1.67
             load = duration_min * hr_reserve * 0.64 * math.exp(exponent * hr_reserve)
             
+            # Fallback classification
             z2_upper = float(self.zones.get('z2_u', 145))
             z4_upper = float(self.zones.get('z4_u', 175))
             if avg_hr > z4_upper: focus_scores['anaerobic'] = load
@@ -226,6 +227,7 @@ class PhysiologyEngine:
         else:
             status = "Recovery"; color_class = "status-gray"; description = "Workload is decreasing."
             
+        # Targets (80/20 model approx)
         total_chronic = chronic_load_total
         targets = {
             'low': {'min': total_chronic * 0.70, 'max': total_chronic * 0.90},
@@ -237,6 +239,7 @@ class PhysiologyEngine:
         if buckets['low'] < targets['low']['min']: feedback = "Shortage: Low Aerobic."
         elif buckets['high'] < targets['high']['min']: feedback = "Shortage: High Aerobic."
         elif buckets['anaerobic'] < targets['anaerobic']['min'] and total_chronic > 500: feedback = "Shortage: Anaerobic."
+        elif buckets['low'] > targets['low']['max']: feedback = "Focus: High Volume of Easy work."
 
         return {
             "acute": round(acute_load), "chronic": round(chronic_load_weekly),
@@ -244,6 +247,103 @@ class PhysiologyEngine:
             "desc": description, "buckets": buckets, "targets": targets,
             "feedback": feedback, "total_4w": total_chronic
         }
+
+# --- Report Generation Function ---
+def generate_report(start_date, end_date, selected_cats):
+    report = [f"**Training & Physio Report**"]
+    report.append(f"{start_date.strftime('%b %d')} - {end_date.strftime('%b %d')}\n")
+    
+    engine = PhysiologyEngine(st.session_state.data['user_profile'])
+    
+    # 1. FIELD ACTIVITIES & LOAD
+    field_types = [t for t in ["Run", "Walk", "Ultimate"] if t in selected_cats]
+    
+    if field_types:
+        runs = st.session_state.data['runs']
+        period_runs = [
+            r for r in runs 
+            if start_date <= datetime.strptime(r['date'], '%Y-%m-%d').date() <= end_date
+            and r['type'] in field_types
+        ]
+        period_runs.sort(key=lambda x: x['date'])
+        
+        if period_runs:
+            total_dist = sum(r['distance'] for r in period_runs)
+            total_time = sum(r['duration'] for r in period_runs)
+            report.append(f"**ACTIVITIES ({len(period_runs)})**")
+            report.append(f"Totals: {total_dist:.1f} km | {format_duration(total_time)}")
+            report.append("")
+            
+            for r in period_runs:
+                zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
+                trimp, focus = engine.calculate_trimp(float(r['duration']), int(r['avgHr']), zones)
+                # Find dominant focus type
+                focus_type = max(focus, key=focus.get) if focus else "low"
+                te, te_label = engine.get_training_effect(trimp)
+                
+                line = f"- {r['date'][5:]}: {r['type']} {r['distance']}km @ {format_duration(r['duration'])}"
+                metrics = []
+                if r['distance'] > 0 and r['type'] != 'Ultimate': metrics.append(f"{format_pace(r['duration']/r['distance'])}/km")
+                if r['avgHr'] > 0: metrics.append(f"{r['avgHr']}bpm")
+                line += f" ({', '.join(metrics)})" if metrics else ""
+                report.append(line)
+                
+                physio_info = f"   Load: {int(trimp)} ({focus_type.title()}) | TE: {te} {te_label}"
+                if r.get('rpe'): physio_info += f" | RPE: {r['rpe']}"
+                if r.get('feel'): physio_info += f" | Feel: {r['feel']}"
+                report.append(physio_info)
+                
+                if r.get('notes'): report.append(f"   Note: {r['notes']}")
+            report.append("")
+    
+    # 2. GYM
+    if "Gym" in selected_cats:
+        gyms = st.session_state.data['gym_sessions']
+        period_gyms = [g for g in gyms if start_date <= datetime.strptime(g['date'], '%Y-%m-%d').date() <= end_date]
+        period_gyms.sort(key=lambda x: x['date'])
+        if period_gyms:
+            report.append(f"**GYM ({len(period_gyms)})**")
+            for g in period_gyms:
+                vol = g.get('totalVolume', 0)
+                report.append(f"- {g['date'][5:]}: {g['routineName']} (Vol: {vol:.0f}kg)")
+            report.append("")
+
+    # 3. HEALTH & RECOVERY
+    if "Stats" in selected_cats:
+        stats = st.session_state.data['health_logs']
+        period_stats = [s for s in stats if start_date <= datetime.strptime(s['date'], '%Y-%m-%d').date() <= end_date]
+        period_stats.sort(key=lambda x: x['date'])
+        if period_stats:
+            report.append(f"**HEALTH LOG**")
+            for s in period_stats:
+                date_str = s['date'][5:]
+                rhr = s.get('rhr', 0)
+                hrv = s.get('hrv', 0)
+                sleep_dec = s.get('sleepHours', 0)
+                sleep_str = format_sleep(sleep_dec)
+                
+                daily_target = engine.get_daily_target(rhr)
+                readiness = daily_target['readiness']
+                report.append(f"- {date_str}: Sleep: {sleep_str} | HRV: {hrv} | RHR: {rhr} | Readiness: {readiness}")
+            report.append("")
+
+    # 4. TRAINING STATUS SNAPSHOT
+    all_runs = st.session_state.data['runs']
+    history_data = []
+    for r in all_runs:
+        zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
+        trimp, focus = engine.calculate_trimp(float(r['duration']), int(r['avgHr']), zones)
+        history_data.append({'date': r['date'], 'load': trimp, 'focus': focus})
+    
+    status = engine.calculate_training_status(history_data)
+    
+    report.append(f"**CURRENT STATUS**")
+    report.append(f"Status: {status['status']}")
+    report.append(f"ACWR: {status['ratio']} (Acute: {status['acute']} / Chronic: {status['chronic']})")
+    buckets = status['buckets']
+    report.append(f"Focus: Low: {int(buckets['low'])} | High: {int(buckets['high'])} | Anaerobic: {int(buckets['anaerobic'])}")
+
+    return "\n".join(report)
 
 # --- UI Render Functions ---
 def setup_page():
