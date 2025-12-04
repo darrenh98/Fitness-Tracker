@@ -596,9 +596,8 @@ with st.sidebar:
         
         # Physio Params
         gender = st.selectbox("Gender", ["Male", "Female"], index=0 if prof.get('gender','Male') == 'Male' else 1)
-        c3, c4, c5 = st.columns(3)
+        c3, c5 = st.columns(2)
         hr_max = c3.number_input("Max HR", value=int(prof.get('hrMax', 190)))
-        hr_rest = c4.number_input("Rest HR", value=int(prof.get('hrRest', 60)))
         vo2 = c5.number_input("VO2 Max", value=float(prof.get('vo2Max', 45)))
         
         # Monthly Averages
@@ -630,7 +629,7 @@ with st.sidebar:
         if st.button("Save Profile"):
             st.session_state.data['user_profile'].update({
                 'weight': new_weight, 'height': new_height, 'gender': gender,
-                'hrMax': hr_max, 'hrRest': hr_rest, 'vo2Max': vo2,
+                'hrMax': hr_max, 'hrRest': m_rhr, 'vo2Max': vo2, # hrRest synced with m_rhr
                 'monthAvgRHR': m_rhr, 'monthAvgHRV': m_hrv,
                 'zones': {
                     "z1_u": z1_u, 
@@ -744,7 +743,7 @@ elif selected_tab == "Cardio Training":
     def_type = st.session_state.form_act_type
     def_date = datetime.now()
     def_dist = 0.0
-    def_dur = 0.0
+    def_dur = 0.0 # Will render as empty string or "00:00:00"
     def_hr = 0
     def_cad = 0
     def_pwr = 0
@@ -775,6 +774,7 @@ elif selected_tab == "Cardio Training":
             scroll_to_top()
 
     form_label = f":material/edit: Edit Activity" if edit_run_id else ":material/add_circle: Log Activity"
+    # Auto collapse if not editing
     expander_state = True if edit_run_id else False
 
     with st.expander(form_label, expanded=expander_state):
@@ -959,17 +959,16 @@ elif selected_tab == "Cardio Training":
                     te, te_label = engine.get_training_effect(trimp)
                     
                     with st.container(border=True):
-                        c_main, c_stats, c_extra, c_act = st.columns([2, 3, 2, 1.5])
+                        c_main, c_stats, c_extra, c_act = st.columns([1.5, 3, 3, 1])
                         icon_map = {"Run": ":material/directions_run:", "Walk": ":material/directions_walk:", "Ultimate": ":material/sports_handball:"}
                         date_obj = datetime.strptime(row['date'], '%Y-%m-%d')
                         date_str = date_obj.strftime('%A, %b %d')
                         c_main.markdown(f"**{date_str}**")
                         c_main.markdown(f"{icon_map.get(row['type'], ':material/help:')} {row['type']}")
-                        stats_html = f"""<div style="line-height: 1.4;"><span class="history-sub">Dist:</span> <span class="history-value">{row['distance']}km</span><br><span class="history-sub">Time:</span> <span class="history-value">{format_duration(row['duration'])}</span><br><span class="history-sub">{'Note' if row['type'] == 'Ultimate' else 'Pace'}:</span> <span class="history-value">{row.get('notes','-') if row['type']=='Ultimate' else format_pace(row['duration']/row['distance'] if row['distance']>0 else 0)+'/km'}</span></div>"""
+                        stats_html = f"""<div style="line-height: 1.4;"><span class="history-sub">Dist:</span> <span class="history-value">{row['distance']}km</span><br><span class="history-sub">Time:</span> <span class="history-value">{format_duration(row['duration'])}</span><br><span class="history-sub">{'Note' if row['type'] == 'Ultimate' else 'Pace'}:</span> <span class="history-value">{row.get('notes','-') if row['type']=='Ultimate' else format_pace(row['duration']/row['distance'] if row['distance']>0 else 0)+'/km'}</span><br><span class="history-sub">RPE:</span> <span class="history-value">{row.get('rpe', '-')}</span></div>"""
                         c_stats.markdown(stats_html, unsafe_allow_html=True)
                         
                         feel_val = row.get('feel', '')
-                        feel_emoji = {"Good": '<span class="material-symbols-rounded">sentiment_satisfied</span>', "Normal": '<span class="material-symbols-rounded">sentiment_neutral</span>', "Tired": '<span class="material-symbols-rounded">sentiment_dissatisfied</span>', "Pain": '<span class="material-symbols-rounded">sick</span>'}.get(feel_val, "")
                         
                         # METRICS HTML
                         metrics_list = []
@@ -980,7 +979,7 @@ elif selected_tab == "Cardio Training":
                         if row.get('power', 0) > 0: metrics_list.append(f"<span class='history-sub'>Pwr:</span> <span class='history-value'>{row['power']}</span>")
                         
                         metrics_html = "<div style='line-height: 1.5;'>" + "<br>".join(metrics_list) + "</div>"
-                        metrics_html += f"<div style='margin-top:4px;'>{feel_emoji}</div>"
+                        metrics_html += f"<div style='margin-top:4px; font-weight:500;'>{feel_val}</div>"
                         c_extra.markdown(metrics_html, unsafe_allow_html=True)
                         
                         with c_act:
@@ -1241,43 +1240,6 @@ elif selected_tab == "Gym":
             st.session_state.gym_save_dialog = False
             st.rerun()
 
-# --- TAB: PLAN ---
-elif selected_tab == "Plan":
-    st.header(":material/calendar_month: Training Plan")
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.container(border=True).markdown("**Macrocycle (Annual)**")
-        macro = st.text_area("Annual Goal", value=st.session_state.data['cycles']['macro'], height=120, key="txt_macro", label_visibility="collapsed")
-        if macro != st.session_state.data['cycles']['macro']:
-            st.session_state.data['cycles']['macro'] = macro
-            persist()
-    with c2:
-        st.container(border=True).markdown("**Mesocycle (Block)**")
-        meso = st.text_area("Block Focus", value=st.session_state.data['cycles']['meso'], height=120, key="txt_meso", label_visibility="collapsed")
-        if meso != st.session_state.data['cycles']['meso']:
-            st.session_state.data['cycles']['meso'] = meso
-            persist()
-    with c3:
-        st.container(border=True).markdown("**Microcycle (Week)**")
-        micro = st.text_area("Weekly Focus", value=st.session_state.data['cycles']['micro'], height=120, key="txt_micro", label_visibility="collapsed")
-        if micro != st.session_state.data['cycles']['micro']:
-            st.session_state.data['cycles']['micro'] = micro
-            persist()
-
-    st.subheader("Weekly Schedule")
-    days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-    cols = st.columns(7)
-    for i, day in enumerate(days):
-        with cols[i]:
-            with st.container(border=True):
-                st.caption(day.upper())
-                am_val = st.text_input("AM", value=st.session_state.data['weekly_plan'][day]['am'], key=f"am_{day}", placeholder="Rest", label_visibility="collapsed")
-                pm_val = st.text_input("PM", value=st.session_state.data['weekly_plan'][day]['pm'], key=f"pm_{day}", placeholder="Rest", label_visibility="collapsed")
-                if (am_val != st.session_state.data['weekly_plan'][day]['am'] or pm_val != st.session_state.data['weekly_plan'][day]['pm']):
-                    st.session_state.data['weekly_plan'][day]['am'] = am_val
-                    st.session_state.data['weekly_plan'][day]['pm'] = pm_val
-                    persist()
-
 # --- TAB: TRENDS ---
 elif selected_tab == "Trends":
     st.header(":material/trending_up: Progress & Trends")
@@ -1358,3 +1320,19 @@ elif selected_tab == "Share":
         if st.button("📄 Generate Text Report", type="primary"):
             report_text = generate_report(start_r, end_r, st.session_state.share_cats)
             st.text_area("Copy this text:", value=report_text, height=400)
+
+# --- TAB: IMPORT ---
+elif selected_tab == "Import":
+    st.header(":material/upload_file: Import Data")
+    with st.container(border=True):
+        st.info("Upload a Word (.docx) file containing reports in the standard format (e.g., '- MM-DD: Type Dist @ Time').")
+        uploaded_file = st.file_uploader("Choose a Word file", type="docx")
+        if uploaded_file is not None:
+            if st.button("Process Import"):
+                count, error = parse_imported_word_data(uploaded_file)
+                if error: st.error(f"Error: {error}")
+                elif count > 0:
+                    st.success(f"Successfully imported {count} activities!")
+                    time.sleep(1)
+                    st.rerun()
+                else: st.warning("No matching activities found in the document.")
