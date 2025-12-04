@@ -206,8 +206,8 @@ st.markdown("""
         gap: 8px;
     }
     .target-load {
-        font-size: 2rem;
-        font-weight: 800;
+        font-size: 1.2rem;
+        font-weight: 700;
         color: #0f172a;
         margin: 0.5rem 0;
     }
@@ -298,7 +298,7 @@ class PhysiologyEngine:
             return {
                 "readiness": "High",
                 "recommendation": "Go Hard / Interval Day",
-                "target_load": "150 - 250 TRIMP",
+                "target_load": "Heavy (e.g., Threshold or 90m+ Long Run)",
                 "message": "Green light. Your system is primed for high intensity.",
                 "color": "#22c55e" # Green
             }
@@ -307,7 +307,7 @@ class PhysiologyEngine:
             return {
                 "readiness": "Low",
                 "recommendation": "Active Recovery / Rest",
-                "target_load": "0 - 40 TRIMP",
+                "target_load": "Recovery (e.g., 30m easy jog or Rest)",
                 "message": "Red light. Focus on sleep and mobility today.",
                 "color": "#ef4444" # Red
             }
@@ -316,7 +316,7 @@ class PhysiologyEngine:
             return {
                 "readiness": "Moderate",
                 "recommendation": "Steady State / Base Miles",
-                "target_load": "80 - 150 TRIMP",
+                "target_load": "Maintenance (e.g., 45-60m Aerobic Z2)",
                 "message": "Train, but keep it controlled. Don't dig a hole.",
                 "color": "#f97316" # Orange
             }
@@ -707,20 +707,21 @@ if selected_tab == "Training Status":
     # 1. Morning Check-in (Top)
     with st.container(border=True):
         st.subheader("☀️ Morning Update")
-        with st.form("daily_health"):
-            h_date = st.date_input("Date", datetime.now())
-            c1, c2 = st.columns(2)
-            rhr = c1.number_input("Resting HR", min_value=30, max_value=150, value=60)
-            hrv = c2.number_input("HRV (ms)", min_value=0, value=40)
-            sleep = st.slider("Sleep Hours", 0.0, 12.0, 7.0, 0.5)
-            if st.form_submit_button("Log Morning Stats"):
+        with st.form("daily_health", clear_on_submit=True): # Added clear_on_submit for streamlining
+            c_date, c_sleep, c_rhr, c_hrv = st.columns(4)
+            h_date = c_date.date_input("Date", datetime.now())
+            sleep = c_sleep.number_input("Sleep (h)", min_value=0.0, max_value=24.0, value=7.0, step=0.5)
+            rhr = c_rhr.number_input("RHR", min_value=30, max_value=150, value=60)
+            hrv = c_hrv.number_input("HRV", min_value=0, value=40)
+            
+            if st.form_submit_button("Log Stats", use_container_width=True):
                 new_h = {"id": int(time.time()), "date": str(h_date), "rhr": rhr, "hrv": hrv, "sleepHours": sleep, "vo2Max": 0} 
                 st.session_state.data['health_logs'].insert(0, new_h)
                 persist()
                 st.success("Logged!")
                 st.rerun()
     
-        # Readiness Indicator
+        # Readiness Indicator using Month Avg from Profile
         if st.session_state.data['health_logs']:
             last_log = st.session_state.data['health_logs'][0]
             engine = PhysiologyEngine(st.session_state.data['user_profile'])
