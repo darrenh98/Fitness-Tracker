@@ -507,6 +507,13 @@ def format_duration(decimal_min):
         return f"{hrs:02d}:{rem_mins:02d}:{secs:02d}"
     return f"{rem_mins:02d}:{secs:02d}"
 
+def format_sleep(decimal_hours):
+    """Converts decimal hours (e.g. 6.83) to '6h 50m' string"""
+    if not decimal_hours: return "-"
+    hrs = int(decimal_hours)
+    mins = int((decimal_hours - hrs) * 60)
+    return f"{hrs}h {mins}m"
+
 def parse_time_input(time_str):
     try:
         clean = time_str.strip()
@@ -602,14 +609,24 @@ def generate_report(start_date, end_date, selected_cats):
     if "Stats" in selected_cats:
         stats = st.session_state.data['health_logs']
         period_stats = [s for s in stats if start_date <= datetime.strptime(s['date'], '%Y-%m-%d').date() <= end_date]
+        period_stats.sort(key=lambda x: x['date']) # Sort chronologically
         
         if period_stats:
-            avg_rhr = sum(s['rhr'] for s in period_stats) / len(period_stats)
-            avg_hrv = sum(s['hrv'] for s in period_stats) / len(period_stats)
-            avg_sleep = sum(s['sleepHours'] for s in period_stats) / len(period_stats)
+            report.append(f"❤️ **HEALTH LOG**")
             
-            report.append(f"❤️ **HEALTH (Avg)**")
-            report.append(f"Sleep: {avg_sleep:.1f}h | HRV: {int(avg_hrv)}ms | RHR: {int(avg_rhr)}bpm")
+            for s in period_stats:
+                date_str = s['date'][5:]
+                rhr = s.get('rhr', 0)
+                hrv = s.get('hrv', 0)
+                sleep_dec = s.get('sleepHours', 0)
+                sleep_str = format_sleep(sleep_dec)
+                
+                # Determine readiness for this day based on CURRENT profile baseline
+                # Note: Ideally we should store baseline at time of log, but for this app we use current
+                daily_target = engine.get_daily_target(rhr)
+                readiness = daily_target['readiness']
+                
+                report.append(f"- {date_str}: Sleep: {sleep_str} | HRV: {hrv} | RHR: {rhr} | Readiness: {readiness}")
             report.append("")
 
     # 4. TRAINING STATUS SNAPSHOT (Based on End Date)
@@ -710,12 +727,16 @@ if selected_tab == "Training Status":
         with st.form("daily_health", clear_on_submit=True): # Added clear_on_submit for streamlining
             c_date, c_sleep, c_rhr, c_hrv = st.columns(4)
             h_date = c_date.date_input("Date", datetime.now())
-            sleep = c_sleep.number_input("Sleep (h)", min_value=0.0, max_value=24.0, value=7.0, step=0.5)
+            # Changed to text input for time format
+            sleep_str = c_sleep.text_input("Sleep (hh:mm)", value="", placeholder="07:30")
             rhr = c_rhr.number_input("RHR", min_value=30, max_value=150, value=60)
             hrv = c_hrv.number_input("HRV", min_value=0, value=40)
             
             if st.form_submit_button("Log Stats", use_container_width=True):
-                new_h = {"id": int(time.time()), "date": str(h_date), "rhr": rhr, "hrv": hrv, "sleepHours": sleep, "vo2Max": 0} 
+                # Parse sleep time to decimal hours for storage
+                sleep_dec = parse_time_input(sleep_str)
+                
+                new_h = {"id": int(time.time()), "date": str(h_date), "rhr": rhr, "hrv": hrv, "sleepHours": sleep_dec, "vo2Max": 0} 
                 st.session_state.data['health_logs'].insert(0, new_h)
                 persist()
                 st.success("Logged!")
