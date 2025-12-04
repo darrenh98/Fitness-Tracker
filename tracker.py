@@ -211,6 +211,40 @@ st.markdown("""
         color: #0f172a;
         margin: 0.5rem 0;
     }
+    
+    /* Load Focus Bars */
+    .load-bar-container {
+        position: relative;
+        height: 24px;
+        background-color: #f1f5f9;
+        border-radius: 12px;
+        margin-bottom: 8px;
+        margin-top: 4px;
+    }
+    .load-bar-fill {
+        height: 100%;
+        border-radius: 12px;
+        position: absolute;
+        left: 0;
+        top: 0;
+    }
+    .load-bar-target {
+        position: absolute;
+        height: 100%;
+        border: 2px solid #1e293b;
+        border-radius: 12px;
+        top: 0;
+        pointer-events: none;
+        box-sizing: border-box;
+    }
+    .load-label {
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: #475569;
+        margin-bottom: 2px;
+        display: flex;
+        justify-content: space-between;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -229,19 +263,42 @@ class PhysiologyEngine:
         self.gender = user_profile.get('gender', 'Male').lower()
         self.zones = user_profile.get('zones', {})
 
+    def classify_activity_load(self, load, avg_hr, zones):
+        """
+        Classifies a session's load into Anaerobic, High Aerobic, or Low Aerobic.
+        Rules:
+        - Anaerobic: Time in Z5 > 5 mins OR Avg HR > Z4 threshold
+        - High Aerobic: Time in Z4 > 10 mins AND Not Anaerobic
+        - Low Aerobic: Everything else
+        """
+        # Get thresholds
+        z4_upper = float(self.zones.get('z4_u', 175))
+        z4_lower = float(self.zones.get('z4_l', 161))
+        
+        # Zones list is [z1, z2, z3, z4, z5] in minutes
+        time_z5 = zones[4] if len(zones) > 4 else 0
+        time_z4 = zones[3] if len(zones) > 3 else 0
+        
+        # Anaerobic Check
+        if time_z5 > 5 or (avg_hr > z4_upper):
+            return "anaerobic"
+        
+        # High Aerobic Check
+        if time_z4 > 10:
+            return "high"
+            
+        # Default to Low Aerobic
+        return "low"
+
     def calculate_trimp(self, duration_min, avg_hr=None, zones=None):
         """
-        Calculates Training Impulse (TRIMP) using Banister's formula.
-        Uses explicit zone boundaries if available.
+        Calculates TRIMP and determines the primary focus classification.
+        Returns (load, focus_type)
         """
         load = 0.0
-        focus_scores = {'low': 0, 'high': 0, 'anaerobic': 0}
-
+        
         if zones and len(self.zones) > 0:
-            # Granular Calculation per Zone using explicit Midpoints
-            # Expected structure: z1_u, z2_l, z2_u, etc.
-            
-            # Define midpoints for calculation
+            # Granular Calculation
             z1_mid = (self.hr_rest + float(self.zones.get('z1_u', 130))) / 2
             z2_mid = (float(self.zones.get('z2_l', 131)) + float(self.zones.get('z2_u', 145))) / 2
             z3_mid = (float(self.zones.get('z3_l', 146)) + float(self.zones.get('z3_u', 160))) / 2
@@ -249,43 +306,25 @@ class PhysiologyEngine:
             z5_mid = (float(self.zones.get('z5_l', 176)) + self.hr_max) / 2
             
             midpoints = [z1_mid, z2_mid, z3_mid, z4_mid, z5_mid]
-            
             exponent = 1.92 if self.gender == 'male' else 1.67
             
             for i, duration in enumerate(zones):
                 if duration <= 0: continue
-                
                 avg_zone_hr = midpoints[i]
-                
-                # Calculate Load for this segment
                 hr_reserve = max(0.0, min(1.0, (avg_zone_hr - self.hr_rest) / (self.hr_max - self.hr_rest)))
                 segment_load = duration * hr_reserve * 0.64 * math.exp(exponent * hr_reserve)
-                
                 load += segment_load
-                
-                # Classify Focus
-                if i <= 1: # Z1, Z2
-                    focus_scores['low'] += segment_load
-                elif i <= 3: # Z3, Z4
-                    focus_scores['high'] += segment_load
-                else: # Z5
-                    focus_scores['anaerobic'] += segment_load
                 
         elif avg_hr and avg_hr > 0:
             # Basic Banister
             hr_reserve = max(0.0, min(1.0, (avg_hr - self.hr_rest) / (self.hr_max - self.hr_rest)))
             exponent = 1.92 if self.gender == 'male' else 1.67
             load = duration_min * hr_reserve * 0.64 * math.exp(exponent * hr_reserve)
+
+        # Classify the entire load into one bucket
+        focus_type = self.classify_activity_load(load, avg_hr if avg_hr else 0, zones if zones else [0,0,0,0,0])
             
-            # Estimate focus based on Avg HR against Zone 2/4 boundaries
-            z2_upper = float(self.zones.get('z2_u', 145))
-            z4_upper = float(self.zones.get('z4_u', 175))
-            
-            if avg_hr > z4_upper: focus_scores['anaerobic'] = load
-            elif avg_hr > z2_upper: focus_scores['high'] = load
-            else: focus_scores['low'] = load
-            
-        return load, focus_scores
+        return load, focus_type
 
     def get_daily_target(self, current_rhr):
         """
@@ -349,7 +388,7 @@ class PhysiologyEngine:
     def calculate_training_status(self, activity_history):
         """
         Calculates Acute:Chronic Workload Ratio (ACWR) and Status.
-        activity_history: list of dicts with {'date': 'YYYY-MM-DD', 'load': float}
+        activity_history: list of dicts with {'date': 'YYYY-MM-DD', 'load': float, 'focus_type': str}
         """
         today = datetime.now().date()
         
@@ -359,25 +398,26 @@ class PhysiologyEngine:
         acute_load = 0
         chronic_load_total = 0
         
-        bucket_totals = {'low': 0, 'high': 0, 'anaerobic': 0}
+        # Bucket Accumulation (Chronic 4-week window)
+        buckets = {'low': 0, 'high': 0, 'anaerobic': 0}
         
         for activity in activity_history:
             act_date = datetime.strptime(activity['date'], '%Y-%m-%d').date()
             load = activity.get('load', 0)
-            focus = activity.get('focus', {})
+            f_type = activity.get('focus_type', 'low') # Default to low if missing
             
             if acute_start <= act_date <= today:
                 acute_load += load
                 
             if chronic_start <= act_date <= today:
                 chronic_load_total += load
-                bucket_totals['low'] += focus.get('low', 0)
-                bucket_totals['high'] += focus.get('high', 0)
-                bucket_totals['anaerobic'] += focus.get('anaerobic', 0)
+                if f_type in buckets:
+                    buckets[f_type] += load
         
         chronic_load_weekly = chronic_load_total / 4.0 if chronic_load_total > 0 else 1.0
         ratio = acute_load / chronic_load_weekly
         
+        # Status Logic
         status = "Recovery"
         color_class = "status-gray"
         description = "Load is very low."
@@ -403,6 +443,27 @@ class PhysiologyEngine:
             status = "Recovery / Detraining"
             color_class = "status-gray"
             description = "Workload is decreasing."
+            
+        # Optimal Target Ranges (80/20 model approx)
+        # Low: 70-90%, High: 10-20%, Anaerobic: 0-10%
+        # Targets calculated based on TOTAL chronic load
+        total_chronic = chronic_load_total
+        targets = {
+            'low': {'min': total_chronic * 0.70, 'max': total_chronic * 0.90},
+            'high': {'min': total_chronic * 0.10, 'max': total_chronic * 0.25}, # widened slightly for flexibility
+            'anaerobic': {'min': total_chronic * 0.0, 'max': total_chronic * 0.10}
+        }
+        
+        # Determine Shortages
+        feedback = "Balanced! Well done."
+        if buckets['low'] < targets['low']['min']:
+            feedback = "Shortage: Low Aerobic. You need more easy base miles."
+        elif buckets['high'] < targets['high']['min']:
+             feedback = "Shortage: High Aerobic. Try a Tempo or Threshold run."
+        elif buckets['anaerobic'] < targets['anaerobic']['min'] and total_chronic > 500: # Only suggest anaerobic if base exists
+             feedback = "Shortage: Anaerobic. Try some sprints or hill repeats."
+        elif buckets['low'] > targets['low']['max']:
+             feedback = "Focus: High Volume of Easy work detected."
 
         return {
             "acute": round(acute_load),
@@ -411,7 +472,10 @@ class PhysiologyEngine:
             "status": status,
             "css": color_class,
             "desc": description,
-            "buckets": bucket_totals
+            "buckets": buckets,
+            "targets": targets,
+            "feedback": feedback,
+            "total_4w": total_chronic
         }
 
 # --- Data Persistence Helper ---
@@ -642,7 +706,7 @@ def generate_report(start_date, end_date, selected_cats):
     for r in all_runs:
         zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
         trimp, focus = engine.calculate_trimp(float(r['duration']), int(r['avgHr']), zones)
-        history_data.append({'date': r['date'], 'load': trimp, 'focus': focus})
+        history_data.append({'date': r['date'], 'load': trimp, 'focus_type': focus})
     
     # Calculate status
     status = engine.calculate_training_status(history_data)
@@ -806,9 +870,10 @@ if selected_tab == "Training Status":
     runs = st.session_state.data['runs']
     for r in runs:
         zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
-        trimp, focus_score = engine.calculate_trimp(duration_min=float(r['duration']), avg_hr=int(r['avgHr']), zones=zones)
+        trimp, focus_type = engine.calculate_trimp(duration_min=float(r['duration']), avg_hr=int(r['avgHr']), zones=zones)
+        # Note: focus_type is now returned by calculate_trimp
         te, te_label = engine.get_training_effect(trimp)
-        history_data.append({'date': r['date'], 'load': trimp, 'te': te, 'te_lbl': te_label, 'type': r['type'], 'focus': focus_score})
+        history_data.append({'date': r['date'], 'load': trimp, 'te': te, 'te_lbl': te_label, 'type': r['type'], 'focus_type': focus_type})
     status_data = engine.calculate_training_status(history_data)
     
     with st.container(border=True):
@@ -816,6 +881,7 @@ if selected_tab == "Training Status":
         sc1, sc2 = st.columns([3, 2])
         with sc1:
             st.markdown(f"""<div style="background-color: {status_data['css'] == 'status-green' and '#dcfce7' or status_data['css'] == 'status-red' and '#fee2e2' or status_data['css'] == 'status-orange' and '#ffedd5' or '#f1f5f9'}; padding: 1rem; border-radius: 12px; border: 1px solid #e2e8f0;"><h2 style="margin:0; color: #0f172a;">{status_data['status']}</h2><p style="margin:5px 0 0 0; color: #475569;">{status_data['desc']}</p></div>""", unsafe_allow_html=True)
+            st.markdown(f"<div style='margin-top:10px; font-weight:500; color:#4b5563;'>{status_data['feedback']}</div>", unsafe_allow_html=True)
         with sc2:
             ratio_val = status_data['ratio']
             st.metric("Acute:Chronic Ratio", ratio_val, delta=None)
@@ -828,12 +894,42 @@ if selected_tab == "Training Status":
     
     st.divider()
     st.subheader("Load Focus (4 weeks)")
+    
+    # Load Focus Visuals
     buckets = status_data['buckets']
-    b_labels = ["Anaerobic (Z5)", "High Aerobic (Z3/Z4)", "Low Aerobic (Z1/Z2)"]
-    b_vals = [buckets['anaerobic'], buckets['high'], buckets['low']]
-    fig_buckets = px.bar(x=b_vals, y=b_labels, orientation='h', text_auto='.0f', color=b_labels, color_discrete_sequence=["#8b5cf6", "#f97316", "#3b82f6"])
-    fig_buckets.update_layout(showlegend=False, xaxis_title="Load", yaxis_title="")
-    st.plotly_chart(fig_buckets, use_container_width=True)
+    targets = status_data['targets']
+    total_4w = status_data['total_4w']
+
+    # Calculate Max Scale for Bars (Target Max or Current Max)
+    max_scale = max(targets['low']['max'], buckets['low'], 1) * 1.2 # 20% buffer
+
+    def draw_focus_bar(label, current, t_min, t_max, color):
+        # Width percentages
+        curr_pct = min((current / max_scale) * 100, 100)
+        min_pct = min((t_min / max_scale) * 100, 100)
+        max_pct = min((t_max / max_scale) * 100, 100)
+        width_pct = max_pct - min_pct
+        
+        # Determine status text
+        if current < t_min: status_txt = "Shortage"
+        elif current > t_max: status_txt = "Over-focus"
+        else: status_txt = "Balanced"
+
+        return f"""
+        <div style="margin-bottom: 12px;">
+            <div class="load-label"><span>{label}</span> <span>{int(current)} <span style="font-weight:400; font-size:0.7rem;">({status_txt})</span></span></div>
+            <div class="load-bar-container">
+                <!-- Hollow Target Box -->
+                <div class="load-bar-target" style="left: {min_pct}%; width: {width_pct}%;"></div>
+                <!-- Filled Actual Bar -->
+                <div class="load-bar-fill" style="width: {curr_pct}%; background-color: {color}; opacity: 0.8;"></div>
+            </div>
+        </div>
+        """
+
+    st.markdown(draw_focus_bar("Anaerobic (Purple)", buckets['anaerobic'], targets['anaerobic']['min'], targets['anaerobic']['max'], "#8b5cf6"), unsafe_allow_html=True)
+    st.markdown(draw_focus_bar("High Aerobic (Orange)", buckets['high'], targets['high']['min'], targets['high']['max'], "#f97316"), unsafe_allow_html=True)
+    st.markdown(draw_focus_bar("Low Aerobic (Blue)", buckets['low'], targets['low']['min'], targets['low']['max'], "#3b82f6"), unsafe_allow_html=True)
 
 # --- TAB: CARDIO TRAINING (Field Runs) ---
 elif selected_tab == "Cardio Training":
