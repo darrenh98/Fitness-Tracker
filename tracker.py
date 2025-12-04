@@ -78,7 +78,7 @@ st.markdown("""
         padding: 1.25rem;
         border-radius: 0.75rem;
         border: 1px solid #f1f5f9;
-        margin-bottom: 0.75rem;
+        margin-bottom: 1.5rem; /* Increased spacing between logs */
         box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
     }
 
@@ -434,7 +434,7 @@ elif selected_tab == "Field (Runs)":
     def_type = st.session_state.form_act_type
     def_date = datetime.now()
     def_dist = 0.0
-    def_dur = 0.0
+    def_dur = 0.0 # Will render as empty string or "00:00:00"
     def_hr = 0
     def_cad = 0
     def_pwr = 0
@@ -483,12 +483,22 @@ elif selected_tab == "Field (Runs)":
 
         # Clear on submit resets the form to empty/0 values automatically
         with st.form("run_form", clear_on_submit=True):
-            st.caption("Activity Type")
-            act_type = st.radio("Type", ["Run", "Walk", "Ultimate"], index=["Run", "Walk", "Ultimate"].index(def_type) if def_type in ["Run", "Walk", "Ultimate"] else 0, key="act_type_radio", horizontal=True, label_visibility="collapsed")
+            # Row 1: Date | Type
+            c_d, c_t = st.columns([1, 3])
+            with c_d:
+                st.caption("Date")
+                act_date = st.date_input("Date", def_date, label_visibility="collapsed")
+            with c_t:
+                st.caption("Activity Type")
+                act_type = st.radio("Type", ["Run", "Walk", "Ultimate"], index=["Run", "Walk", "Ultimate"].index(def_type) if def_type in ["Run", "Walk", "Ultimate"] else 0, key="act_type_radio", horizontal=True, label_visibility="collapsed")
+            
+            # Row 2: Dist | Duration
             c1, c2 = st.columns(2)
             with c1:
                 st.caption("Distance (km)")
-                dist = st.number_input("Distance", min_value=0.0, step=0.01, value=float(def_dist), label_visibility="collapsed")
+                # Use None for placeholder effect if default is 0.0 and not editing
+                dist_val = float(def_dist) if edit_run_id or def_dist > 0 else None
+                dist = st.number_input("Distance", min_value=0.0, step=0.01, value=dist_val, placeholder="0.00", label_visibility="collapsed")
             with c2:
                 st.caption("Duration (hh:mm:ss)")
                 # If new log, show empty string so placeholder shows "00:30:00"
@@ -517,13 +527,8 @@ elif selected_tab == "Field (Runs)":
             z4 = rc4.text_input("Zone 4", value=def_z4, placeholder="00:00")
             z5 = rc5.text_input("Zone 5", value=def_z5, placeholder="00:00")
             
-            c_feel, c_date = st.columns(2)
-            with c_feel:
-                st.caption("How did it feel?")
-                feel = st.radio("Feel", ["Good", "Normal", "Tired", "Pain"], index=["Good", "Normal", "Tired", "Pain"].index(def_feel) if def_feel in ["Good", "Normal", "Tired", "Pain"] else 1, horizontal=True, label_visibility="collapsed")
-            with c_date:
-                st.caption("Date")
-                act_date = st.date_input("Date", def_date, label_visibility="collapsed")
+            st.caption("How did it feel?")
+            feel = st.radio("Feel", ["Good", "Normal", "Tired", "Pain"], index=["Good", "Normal", "Tired", "Pain"].index(def_feel) if def_feel in ["Good", "Normal", "Tired", "Pain"] else 1, horizontal=True, label_visibility="collapsed")
             
             st.caption("Notes")
             notes = st.text_area("Notes", value=def_notes, placeholder="Easy run, felt strong...", height=3, label_visibility="collapsed")
@@ -532,9 +537,12 @@ elif selected_tab == "Field (Runs)":
             
             if st.form_submit_button(btn_text):
                 new_id = int(time.time() * 1000)
+                # Handle None distance input
+                dist_save = dist if dist is not None else 0.0
+                
                 run_obj = {
                     "id": edit_run_id if edit_run_id else new_id,
-                    "date": str(act_date), "type": act_type, "distance": dist, 
+                    "date": str(act_date), "type": act_type, "distance": dist_save, 
                     "duration": parse_time_input(dur_str),
                     "avgHr": hr, "rpe": rpe, "feel": feel, 
                     "cadence": cadence, "power": power,
@@ -559,7 +567,8 @@ elif selected_tab == "Field (Runs)":
                 tpl_name = st.text_input("Template Name", placeholder="Morning 5k")
                 if st.button("Save Template"):
                     if tpl_name:
-                        st.session_state.data['templates'][tpl_name] = {"type": def_type, "distance": dist, "duration": parse_time_input(dur_str), "notes": notes}
+                        dist_save = dist if dist is not None else 0.0
+                        st.session_state.data['templates'][tpl_name] = {"type": def_type, "distance": dist_save, "duration": parse_time_input(dur_str), "notes": notes}
                         persist()
                         st.success(f"Saved '{tpl_name}'!")
                         st.rerun()
@@ -686,11 +695,21 @@ elif selected_tab == "Field (Runs)":
             st.divider()
 
             if not filtered_df.empty:
+                # Sort Chronologically: Latest First
+                # Convert date strings to datetime objects for sorting (if not already handled by dataframe, but safer here)
+                # We created dt_obj earlier, use that
+                filtered_df = filtered_df.sort_values(by='dt_obj', ascending=False)
+
                 for idx, row in filtered_df.iterrows():
                     with st.container():
                         c_main, c_stats, c_extra, c_act = st.columns([2, 3, 2, 1.5])
                         icon_map = {"Run": ":material/directions_run:", "Walk": ":material/directions_walk:", "Ultimate": ":material/sports_handball:"}
-                        c_main.markdown(f"**{row['date']}**")
+                        
+                        # Date Formatting: Friday, Dec 05
+                        date_obj = datetime.strptime(row['date'], '%Y-%m-%d')
+                        date_str = date_obj.strftime('%A, %b %d')
+                        
+                        c_main.markdown(f"**{date_str}**")
                         c_main.markdown(f"{icon_map.get(row['type'], ':material/help:')} {row['type']}")
                         stats_html = f"""
                         <div style="line-height: 1.4;">
