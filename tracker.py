@@ -11,25 +11,25 @@ import re
 import math
 import streamlit.components.v1 as components
 
-# --- Firebase Init ---
+# --- Firebase Initialization ---
 import firebase_admin
 from firebase_admin import credentials, firestore
 
-# Initialize Firebase (Server-side)
+# Initialize Firebase (Server-side) safely
 if not firebase_admin._apps:
     try:
         key_dict = dict(st.secrets["firebase"])
         cred = credentials.Certificate(key_dict)
         firebase_admin.initialize_app(cred)
-    except Exception as e:
-        pass
+    except Exception:
+        pass # Handled by db check later
 
 try:
     db = firestore.client()
 except:
-    db = None
+    db = None # Fallback to local storage mode
 
-# --- Configuration & Styling ---
+# --- App Configuration ---
 st.set_page_config(
     page_title="RunLog Hub",
     page_icon=":material/sprint:",
@@ -37,82 +37,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- UI Setup Function (Defined Globally) ---
-def setup_page():
-    st.markdown("""
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-        @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200');
-        
-        html, body, [class*="css"] { font-family: 'Inter', sans-serif; color: #44403c; }
-        .stApp { background-color: #fafaf9; }
-        
-        /* Icons */
-        .material-symbols-rounded { font-size: 1.1rem; vertical-align: middle; color: #78716c; }
-        
-        /* Headers */
-        h1, h2, h3 { font-weight: 800 !important; letter-spacing: -0.025em; color: #292524; }
-        
-        /* Cards */
-        .stCard, [data-testid="stForm"] { 
-            background-color: #ffffff; 
-            padding: 1.5rem; 
-            border-radius: 1rem; 
-            box-shadow: 0 4px 6px -1px rgba(68, 64, 60, 0.05); 
-            border: 1px solid #f5f5f4; 
-        }
-        
-        /* Metric Boxes */
-        [data-testid="stMetric"] {
-            background-color: #ffffff;
-            padding: 15px;
-            border-radius: 12px;
-            box-shadow: 0 1px 3px 0 rgba(0,0,0,0.05);
-            border: 1px solid #e7e5e4;
-            text-align: center;
-        }
-        [data-testid="stMetricValue"] { font-size: 1.6rem; font-weight: 800; color: #44403c; }
-        [data-testid="stMetricLabel"] { font-size: 0.75rem; font-weight: 600; color: #a8a29e; letter-spacing: 0.05em; text-transform: uppercase; }
-        
-        /* History Lists */
-        [data-testid="stVerticalBlock"] > [style*="flex-direction: column;"] > [data-testid="stVerticalBlock"] > [data-testid="stContainer"] {
-            background-color: #ffffff; padding: 1.25rem; border-radius: 0.75rem; border: 1px solid #e7e5e4; margin-bottom: 1.0rem; box-shadow: 0 1px 2px 0 rgba(68, 64, 60, 0.05);
-        }
-        .history-label { font-size: 0.7rem; text-transform: uppercase; color: #a8a29e; font-weight: 600; margin-bottom: 0px; }
-        .history-value { font-size: 1rem; font-weight: 600; color: #57534e; }
-        .history-sub { font-size: 0.85rem; color: #78716c; }
-        
-        /* Inputs & Buttons */
-        .stTextInput input, .stNumberInput input, .stSelectbox select, .stDateInput input, .stTextArea textarea { 
-            border-radius: 8px; border: 1px solid #e7e5e4; padding: 0.75rem; background-color: #fff; color: #44403c; 
-        }
-        .stButton button { border-radius: 8px; font-weight: 500; padding: 0.4rem 0.8rem; border: 1px solid #e7e5e4; background-color: #ffffff; color: #57534e; }
-        .stButton button:hover { border-color: #c2410c; color: #c2410c; background-color: #fff7ed; }
-        [data-testid="stFormSubmitButton"] button { background-color: #c2410c; color: white; padding: 0.6rem 1.2rem; width: 100%; border: none; }
-        [data-testid="stFormSubmitButton"] button:hover { background-color: #9a3412; }
-        .streamlit-expanderHeader { font-weight: 600; color: #44403c; border-radius: 8px; background-color: #ffffff; }
-        [data-testid="stRadio"] > div { flex-direction: row; gap: 10px; flex-wrap: wrap; }
-        @media only screen and (max-width: 600px) { .stCard, [data-testid="stForm"] { padding: 1rem; } [data-testid="stMetricValue"] { font-size: 1.4rem; } [data-testid="stVerticalBlock"] > [style*="flex-direction: column;"] > [data-testid="stVerticalBlock"] > [data-testid="stContainer"] { padding: 0.75rem; } }
-        
-        /* Custom Components */
-        .status-badge { padding: 4px 12px; border-radius: 20px; font-weight: 700; font-size: 0.8rem; display: inline-block; }
-        .status-red { background-color: #fecaca; color: #991b1b; }
-        .status-orange { background-color: #ffedd5; color: #c2410c; }
-        .status-green { background-color: #dcfce7; color: #166534; }
-        .status-gray { background-color: #f5f5f4; color: #78716c; }
-        
-        .daily-target { background-color: #ffffff; border-radius: 12px; padding: 1.5rem; border: 1px solid #e7e5e4; margin-top: 1rem; }
-        .target-header { font-size: 1.1rem; font-weight: 800; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 8px; }
-        .target-load { font-size: 1.2rem; font-weight: 700; color: #c2410c; margin: 0.5rem 0; }
-        
-        .load-bar-container { position: relative; height: 24px; background-color: #f5f5f4; border-radius: 12px; margin-bottom: 8px; margin-top: 4px; }
-        .load-bar-fill { height: 100%; border-radius: 12px; position: absolute; left: 0; top: 0; }
-        .load-bar-target { position: absolute; height: 100%; border: 2px solid #44403c; border-radius: 12px; top: 0; pointer-events: none; box-sizing: border-box; }
-        .load-label { font-size: 0.75rem; font-weight: 600; color: #78716c; margin-bottom: 2px; display: flex; justify-content: space-between; }
-    </style>
-    """, unsafe_allow_html=True)
-
-# --- Data Persistence Helper ---
+# --- Constants & Default Data ---
 DATA_FILE = "run_tracker_data.json"
 
 DEFAULT_DATA = {
@@ -133,8 +58,72 @@ DEFAULT_DATA = {
     "weekly_plan": {day: {"am": "", "pm": ""} for day in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']}
 }
 
+# --- Helper Functions ---
+
+def get_malaysia_time():
+    """Returns current time in Malaysia (UTC+8) as a timezone-aware object."""
+    return datetime.now(timezone.utc) + timedelta(hours=8)
+
+def format_pace(decimal_min):
+    if not decimal_min or decimal_min == 0: return "-"
+    mins = int(decimal_min)
+    secs = int((decimal_min - mins) * 60)
+    return f"{mins}'{secs:02d}\""
+
+def format_duration(decimal_min):
+    if not decimal_min: return "00:00:00"
+    mins = int(decimal_min)
+    secs = int((decimal_min - mins) * 60)
+    hrs = mins // 60
+    rem_mins = mins % 60
+    if hrs > 0: return f"{hrs:02d}:{rem_mins:02d}:{secs:02d}"
+    return f"{rem_mins:02d}:{secs:02d}"
+
+def format_sleep(decimal_hours):
+    if not decimal_hours: return "-"
+    hrs = int(decimal_hours)
+    mins = int((decimal_hours - hrs) * 60)
+    return f"{hrs}h {mins}m"
+
+def parse_time_input(time_str):
+    """Parses HH:MM:SS or HH:MM string to decimal minutes."""
+    try:
+        clean = time_str.strip()
+        if not clean: return 0.0
+        parts = clean.split(":")
+        if len(parts) == 3: return float(parts[0]) * 60 + float(parts[1]) + float(parts[2]) / 60
+        elif len(parts) == 2: return float(parts[0]) + float(parts[1]) / 60
+        elif len(parts) == 1: return float(parts[0])
+        return 0.0
+    except:
+        return 0.0
+
+def float_to_hhmm(val):
+    """Converts decimal hours to 'HH:MM' string."""
+    if not val: return ""
+    hours = int(val)
+    minutes = int((val - hours) * 60)
+    return f"{hours:02d}:{minutes:02d}"
+
+def scroll_to_top():
+    js = """<script>var body = window.parent.document.querySelector(".main"); if (body) { body.scrollTop = 0; }</script>"""
+    components.html(js, height=0)
+
+def get_last_lift_stats(ex_name):
+    sessions = st.session_state.data.get('gym_sessions', [])
+    if not sessions: return None
+    for s in sessions:
+        for ex in s['exercises']:
+            if ex['name'].lower() == ex_name.lower():
+                return ", ".join([f"{s['reps']}x{s['weight']}kg" for s in ex['sets']])
+    return None
+
+# --- Data IO ---
+
 def load_data():
     data = copy.deepcopy(DEFAULT_DATA)
+    
+    # Offline Mode
     if not db:
         if os.path.exists(DATA_FILE):
             try:
@@ -144,30 +133,29 @@ def load_data():
             except: pass
         return data
 
+    # Firestore Mode
     try:
         # 1. Runs
-        runs_ref = db.collection("runs").stream()
-        for doc in runs_ref:
+        for doc in db.collection("runs").stream():
             r = doc.to_dict()
             r['id'] = doc.id
             data["runs"].append(r)
         
         # 2. Gym
-        gym_ref = db.collection("gym_sessions").stream()
-        for doc in gym_ref:
+        for doc in db.collection("gym_sessions").stream():
             g = doc.to_dict()
             g['id'] = doc.id
             data["gym_sessions"].append(g)
             
         # 3. Health
-        health_ref = db.collection("health_logs").stream()
-        for doc in health_ref:
+        for doc in db.collection("health_logs").stream():
             h = doc.to_dict()
             h['id'] = doc.id
             data["health_logs"].append(h)
         
         # 4. Settings
         settings_ref = db.collection("settings")
+        
         prof_doc = settings_ref.document("profile").get()
         if prof_doc.exists: data['user_profile'].update(prof_doc.to_dict())
             
@@ -182,84 +170,26 @@ def load_data():
             if 'cycles' in plan_data: data['cycles'] = plan_data['cycles']
             if 'weekly_plan' in plan_data: data['weekly_plan'] = plan_data['weekly_plan']
 
-        # Sort
-        data["runs"].sort(key=lambda x: x.get('date', ''), reverse=True)
-        data["gym_sessions"].sort(key=lambda x: x.get('date', ''), reverse=True)
-        data["health_logs"].sort(key=lambda x: x.get('date', ''), reverse=True)
+        # Sort all lists chronologically descending
+        for key in ["runs", "gym_sessions", "health_logs"]:
+            data[key].sort(key=lambda x: x.get('date', ''), reverse=True)
         
     except Exception as e:
         st.error(f"Error loading data: {e}")
     
     return data
 
-def save_data(data):
+def save_data_local(data):
     with open(DATA_FILE, 'w') as f:
         json.dump(data, f, indent=4)
 
 def persist():
+    """Saves data locally if Firestore is not available."""
     if not db:
-        save_data(st.session_state.data)
+        save_data_local(st.session_state.data)
 
-def get_last_lift_stats(ex_name):
-    sessions = st.session_state.data.get('gym_sessions', [])
-    if not sessions: return None
-    for s in sessions:
-        for ex in s['exercises']:
-            if ex['name'].lower() == ex_name.lower():
-                return ", ".join([f"{s['reps']}x{s['weight']}kg" for s in ex['sets']])
-    return None
+# --- Physiology Logic ---
 
-# --- Helper Functions ---
-def get_malaysia_time():
-    """Returns current time in Malaysia (UTC+8) using timezone-aware object"""
-    return datetime.now(timezone.utc) + timedelta(hours=8)
-
-def format_pace(decimal_min):
-    if not decimal_min or decimal_min == 0: return "-"
-    mins = int(decimal_min)
-    secs = int((decimal_min - mins) * 60)
-    return f"{mins}'{secs:02d}\""
-
-def format_duration(decimal_min):
-    if not decimal_min:
-        return "00:00:00"
-    mins = int(decimal_min)
-    secs = int((decimal_min - mins) * 60)
-    hrs = mins // 60
-    rem_mins = mins % 60
-    if hrs > 0:
-        return f"{hrs:02d}:{rem_mins:02d}:{secs:02d}"
-    return f"{rem_mins:02d}:{secs:02d}"
-
-def format_sleep(decimal_hours):
-    if not decimal_hours: return "-"
-    hrs = int(decimal_hours)
-    mins = int((decimal_hours - hrs) * 60)
-    return f"{hrs}h {mins}m"
-
-def parse_time_input(time_str):
-    try:
-        clean = time_str.strip()
-        if not clean: return 0.0
-        parts = clean.split(":")
-        if len(parts) == 3: return float(parts[0]) * 60 + float(parts[1]) + float(parts[2]) / 60
-        elif len(parts) == 2: return float(parts[0]) + float(parts[1]) / 60
-        elif len(parts) == 1: return float(parts[0])
-        return 0.0
-    except:
-        return 0.0
-
-def float_to_hhmm(val):
-    if not val: return ""
-    hours = int(val)
-    minutes = int((val - hours) * 60)
-    return f"{hours:02d}:{minutes:02d}"
-
-def scroll_to_top():
-    js = """<script>var body = window.parent.document.querySelector(".main"); if (body) { body.scrollTop = 0; }</script>"""
-    components.html(js, height=0)
-
-# --- Physiology Engine ---
 class PhysiologyEngine:
     def __init__(self, user_profile):
         self.hr_max = float(user_profile.get('hrMax', 190))
@@ -280,35 +210,37 @@ class PhysiologyEngine:
     def calculate_trimp(self, duration_min, avg_hr=None, zones=None):
         load = 0.0
         focus_scores = {'low': 0, 'high': 0, 'anaerobic': 0}
+        exponent = 1.92 if self.gender == 'male' else 1.67
 
         if zones and len(self.zones) > 0:
-            # Granular Calculation per Zone using explicit Midpoints
-            z1_mid = (self.hr_rest + float(self.zones.get('z1_u', 130))) / 2
-            z2_mid = (float(self.zones.get('z2_l', 131)) + float(self.zones.get('z2_u', 145))) / 2
-            z3_mid = (float(self.zones.get('z3_l', 146)) + float(self.zones.get('z3_u', 160))) / 2
-            z4_mid = (float(self.zones.get('z4_l', 161)) + float(self.zones.get('z4_u', 175))) / 2
-            z5_mid = (float(self.zones.get('z5_l', 176)) + self.hr_max) / 2
-            midpoints = [z1_mid, z2_mid, z3_mid, z4_mid, z5_mid]
-            exponent = 1.92 if self.gender == 'male' else 1.67
+            # Explicit Zone Midpoints
+            z_bounds = [
+                (self.hr_rest + float(self.zones.get('z1_u', 130))) / 2,
+                (float(self.zones.get('z2_l', 131)) + float(self.zones.get('z2_u', 145))) / 2,
+                (float(self.zones.get('z3_l', 146)) + float(self.zones.get('z3_u', 160))) / 2,
+                (float(self.zones.get('z4_l', 161)) + float(self.zones.get('z4_u', 175))) / 2,
+                (float(self.zones.get('z5_l', 176)) + self.hr_max) / 2
+            ]
             
             for i, duration in enumerate(zones):
                 if duration <= 0: continue
-                avg_zone_hr = midpoints[i]
+                if i >= len(z_bounds): break
+                
+                avg_zone_hr = z_bounds[i]
                 hr_reserve = max(0.0, min(1.0, (avg_zone_hr - self.hr_rest) / (self.hr_max - self.hr_rest)))
                 segment_load = duration * hr_reserve * 0.64 * math.exp(exponent * hr_reserve)
                 load += segment_load
                 
+                # Split Load Focus
                 if i <= 1: focus_scores['low'] += segment_load
                 elif i <= 3: focus_scores['high'] += segment_load
                 else: focus_scores['anaerobic'] += segment_load
                 
         elif avg_hr and avg_hr > 0:
-            # Basic Banister
+            # Fallback if only Avg HR is known
             hr_reserve = max(0.0, min(1.0, (avg_hr - self.hr_rest) / (self.hr_max - self.hr_rest)))
-            exponent = 1.92 if self.gender == 'male' else 1.67
             load = duration_min * hr_reserve * 0.64 * math.exp(exponent * hr_reserve)
             
-            # Fallback classification
             z2_upper = float(self.zones.get('z2_u', 145))
             z4_upper = float(self.zones.get('z4_u', 175))
             if avg_hr > z4_upper: focus_scores['anaerobic'] = load
@@ -330,6 +262,7 @@ class PhysiologyEngine:
         scaling = self.vo2_max * 1.5
         if scaling == 0: return 0.0, "None"
         te = round(min(5.0, trimp_score / scaling), 1)
+        
         label = "Recovery"
         if te >= 1.0 and te < 2.0: label = "Maintaining"
         elif te >= 2.0 and te < 3.0: label = "Productive"
@@ -337,23 +270,9 @@ class PhysiologyEngine:
         elif te >= 4.0 and te < 5.0: label = "Highly Improving"
         elif te >= 5.0: label = "Overreaching"
         return te, label
-    
-    def get_trimp_label(self, trimp):
-        if trimp < 50: return "Light"
-        if trimp < 100: return "Moderate"
-        if trimp < 200: return "Hard"
-        return "Extreme"
 
     def calculate_training_status(self, activity_history, reference_date=None):
-        """
-        Calculates Acute:Chronic Workload Ratio (ACWR) and Status.
-        Supports reference_date to calculate status for a specific point in time.
-        """
-        if reference_date:
-            today = reference_date
-        else:
-            today = get_malaysia_time().date()
-            
+        today = reference_date if reference_date else get_malaysia_time().date()
         acute_start = today - timedelta(days=6)
         chronic_start = today - timedelta(days=27)
         
@@ -362,14 +281,15 @@ class PhysiologyEngine:
         buckets = {'low': 0, 'high': 0, 'anaerobic': 0}
         
         for activity in activity_history:
-            act_date = datetime.strptime(activity['date'], '%Y-%m-%d').date()
+            try:
+                act_date = datetime.strptime(activity['date'], '%Y-%m-%d').date()
+            except: continue # Skip invalid dates
+            
+            if act_date > today: continue
+                
             load = activity.get('load', 0)
             focus = activity.get('focus', {})
             
-            # Only count activities up to the reference date
-            if act_date > today:
-                continue
-                
             if acute_start <= act_date <= today:
                 acute_load += load
             if chronic_start <= act_date <= today:
@@ -393,9 +313,7 @@ class PhysiologyEngine:
             if acute_load > chronic_load_weekly: status = "Productive"; color_class = "status-green"; description = "Building fitness."
             else: status = "Maintaining"; color_class = "status-green"; description = "Load is consistent."
         else:
-            status = "Recovery / Detraining"
-            color_class = "status-gray"
-            description = "Workload is decreasing."
+            status = "Recovery"; color_class = "status-gray"; description = "Workload is decreasing."
             
         total_chronic = chronic_load_total
         targets = {
@@ -417,90 +335,55 @@ class PhysiologyEngine:
             "feedback": feedback, "total_4w": total_chronic
         }
 
-# --- Report Generation ---
-def generate_report(start_date, end_date, selected_cats):
-    report = [f"Training & Physio Report"]
-    report.append(f"{start_date.strftime('%b %d')} - {end_date.strftime('%b %d')}\n")
-    
-    engine = PhysiologyEngine(st.session_state.data['user_profile'])
-    
-    field_types = [t for t in ["Run", "Walk", "Ultimate"] if t in selected_cats]
-    
-    if field_types:
-        runs = st.session_state.data['runs']
-        period_runs = [r for r in runs if start_date <= datetime.strptime(r['date'], '%Y-%m-%d').date() <= end_date and r['type'] in field_types]
-        period_runs.sort(key=lambda x: x['date'])
-        
-        if period_runs:
-            total_dist = sum(r['distance'] for r in period_runs)
-            total_time = sum(r['duration'] for r in period_runs)
-            report.append(f"ACTIVITIES ({len(period_runs)})")
-            report.append(f"Totals: {total_dist:.1f} km | {format_duration(total_time)}")
-            report.append("")
-            for r in period_runs:
-                zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
-                trimp, focus = engine.calculate_trimp(float(r['duration']), int(r['avgHr']), zones)
-                te, te_label = engine.get_training_effect(trimp)
-                line = f"- {r['date'][5:]}: {r['type']} {r['distance']}km @ {format_duration(r['duration'])}"
-                metrics = []
-                if r['distance'] > 0 and r['type'] != 'Ultimate': metrics.append(f"{format_pace(r['duration']/r['distance'])}/km")
-                if r['avgHr'] > 0: metrics.append(f"{r['avgHr']}bpm")
-                line += f" ({', '.join(metrics)})" if metrics else ""
-                report.append(line)
-                
-                # Find dominant focus for summary
-                focus_type = max(focus, key=focus.get) if focus else "low"
-                physio_info = f"   Load: {int(trimp)} ({focus_type.title()}) | TE: {te} {te_label}"
-                
-                if r.get('rpe'): physio_info += f" | RPE: {r['rpe']}"
-                report.append(physio_info)
-                if r.get('notes'): report.append(f"   Note: {r['notes']}")
-            report.append("")
-    
-    if "Gym" in selected_cats:
-        gyms = st.session_state.data['gym_sessions']
-        period_gyms = [g for g in gyms if start_date <= datetime.strptime(g['date'], '%Y-%m-%d').date() <= end_date]
-        period_gyms.sort(key=lambda x: x['date'])
-        if period_gyms:
-            report.append(f"GYM ({len(period_gyms)})")
-            for g in period_gyms:
-                vol = g.get('totalVolume', 0)
-                report.append(f"- {g['date'][5:]}: {g['routineName']} (Vol: {vol:.0f}kg)")
-            report.append("")
+# --- UI Setup ---
+def setup_page():
+    st.markdown("""
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200');
+        html, body, [class*="css"] { font-family: 'Inter', sans-serif; color: #44403c; }
+        .stApp { background-color: #fafaf9; }
+        .material-symbols-rounded { font-size: 1.1rem; vertical-align: middle; color: #78716c; }
+        h1, h2, h3 { font-weight: 800 !important; letter-spacing: -0.025em; color: #292524; }
+        .stCard, [data-testid="stForm"] { background-color: #ffffff; padding: 1.5rem; border-radius: 1rem; box-shadow: 0 4px 6px -1px rgba(68, 64, 60, 0.05); border: 1px solid #f5f5f4; }
+        [data-testid="stVerticalBlock"] > [style*="flex-direction: column;"] > [data-testid="stVerticalBlock"] > [data-testid="stContainer"] {
+            background-color: #ffffff; padding: 1.25rem; border-radius: 0.75rem; border: 1px solid #e7e5e4; margin-bottom: 1.0rem; box-shadow: 0 1px 2px 0 rgba(68, 64, 60, 0.05);
+        }
+        /* Metrics */
+        [data-testid="stMetric"] { background-color: #ffffff; padding: 15px; border-radius: 12px; box-shadow: 0 1px 3px 0 rgba(0,0,0,0.05); border: 1px solid #e7e5e4; text-align: center; }
+        [data-testid="stMetricValue"] { font-size: 1.6rem; font-weight: 800; color: #44403c; }
+        [data-testid="stMetricLabel"] { font-size: 0.75rem; font-weight: 600; color: #a8a29e; letter-spacing: 0.05em; text-transform: uppercase; }
+        /* History */
+        .history-label { font-size: 0.7rem; text-transform: uppercase; color: #a8a29e; font-weight: 600; margin-bottom: 0px; }
+        .history-value { font-size: 1rem; font-weight: 600; color: #57534e; }
+        .history-sub { font-size: 0.85rem; color: #78716c; }
+        /* Inputs */
+        .stTextInput input, .stNumberInput input, .stSelectbox select, .stDateInput input, .stTextArea textarea { border-radius: 8px; border: 1px solid #e7e5e4; padding: 0.75rem; background-color: #fff; color: #44403c; }
+        .stButton button { border-radius: 8px; font-weight: 500; padding: 0.4rem 0.8rem; border: 1px solid #e7e5e4; background-color: #ffffff; color: #57534e; }
+        .stButton button:hover { border-color: #c2410c; color: #c2410c; background-color: #fff7ed; }
+        [data-testid="stFormSubmitButton"] button { background-color: #c2410c; color: white; padding: 0.6rem 1.2rem; width: 100%; border: none; }
+        [data-testid="stFormSubmitButton"] button:hover { background-color: #9a3412; }
+        .streamlit-expanderHeader { font-weight: 600; color: #44403c; border-radius: 8px; background-color: #ffffff; }
+        [data-testid="stRadio"] > div { flex-direction: row; gap: 10px; flex-wrap: wrap; }
+        @media only screen and (max-width: 600px) { .stCard, [data-testid="stForm"] { padding: 1rem; } [data-testid="stMetricValue"] { font-size: 1.4rem; } [data-testid="stVerticalBlock"] > [style*="flex-direction: column;"] > [data-testid="stVerticalBlock"] > [data-testid="stContainer"] { padding: 0.75rem; } }
+        /* Badges & Bars */
+        .status-badge { padding: 4px 12px; border-radius: 20px; font-weight: 700; font-size: 0.8rem; display: inline-block; }
+        .status-red { background-color: #fecaca; color: #991b1b; }
+        .status-orange { background-color: #ffedd5; color: #c2410c; }
+        .status-green { background-color: #dcfce7; color: #166534; }
+        .status-gray { background-color: #f5f5f4; color: #78716c; }
+        .daily-target { background-color: #ffffff; border-radius: 12px; padding: 1.5rem; border: 1px solid #e7e5e4; margin-top: 1rem; }
+        .target-header { font-size: 1.1rem; font-weight: 800; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 8px; }
+        .target-load { font-size: 1.2rem; font-weight: 700; color: #c2410c; margin: 0.5rem 0; }
+        .load-bar-container { position: relative; height: 24px; background-color: #f5f5f4; border-radius: 12px; margin-bottom: 8px; margin-top: 4px; }
+        .load-bar-fill { height: 100%; border-radius: 12px; position: absolute; left: 0; top: 0; }
+        .load-bar-target { position: absolute; height: 100%; border: 2px solid #44403c; border-radius: 12px; top: 0; pointer-events: none; box-sizing: border-box; }
+        .load-label { font-size: 0.75rem; font-weight: 600; color: #78716c; margin-bottom: 2px; display: flex; justify-content: space-between; }
+    </style>
+    """, unsafe_allow_html=True)
 
-    if "Stats" in selected_cats:
-        stats = st.session_state.data['health_logs']
-        period_stats = [s for s in stats if start_date <= datetime.strptime(s['date'], '%Y-%m-%d').date() <= end_date]
-        period_stats.sort(key=lambda x: x['date'])
-        if period_stats:
-            report.append(f"HEALTH LOG")
-            for s in period_stats:
-                date_str = s['date'][5:]
-                sleep_str = format_sleep(s.get('sleepHours', 0))
-                daily_target = engine.get_daily_target(s.get('rhr', 0))
-                report.append(f"- {date_str}: Sleep: {sleep_str} | Readiness: {daily_target['readiness']}")
-    
-    # --- Status Snapshot at End of Report Period ---
-    all_runs = st.session_state.data['runs']
-    history_data = []
-    for r in all_runs:
-        zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
-        trimp, focus = engine.calculate_trimp(float(r['duration']), int(r['avgHr']), zones)
-        history_data.append({'date': r['date'], 'load': trimp, 'focus': focus})
-    
-    # Calculate status relative to the end date of the report
-    status = engine.calculate_training_status(history_data, reference_date=end_date)
-    
-    report.append("")
-    report.append(f"STATUS (As of {end_date})")
-    report.append(f"Status: {status['status']}")
-    report.append(f"ACWR: {status['ratio']} (Acute: {status['acute']} / Chronic: {status['chronic']})")
-    buckets = status['buckets']
-    report.append(f"Focus: Low: {int(buckets['low'])} | High: {int(buckets['high'])} | Anaerobic: {int(buckets['anaerobic'])}")
+# --- Render Views ---
 
-    return "\n".join(report)
-
-# --- Sidebar Navigation ---
 def render_sidebar():
     with st.sidebar:
         st.title(":material/sprint: RunLog Hub")
@@ -552,11 +435,8 @@ def render_sidebar():
                 st.success("Saved!")
         return selected_tab
 
-# --- TAB RENDERERS ---
-
 def render_training_status():
     st.header(":material/monitor_heart: Training Status")
-    setup_page()
     
     with st.container(border=True):
         c_header, c_date = st.columns([3, 2])
@@ -665,7 +545,6 @@ def render_training_status():
 
 def render_cardio():
     st.header(":material/directions_run: Cardio Training")
-    setup_page()
     runs_df = pd.DataFrame(st.session_state.data['runs'])
     engine = PhysiologyEngine(st.session_state.data['user_profile'])
     if 'run_log_success' in st.session_state and st.session_state.run_log_success:
