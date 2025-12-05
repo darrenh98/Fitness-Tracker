@@ -62,7 +62,7 @@ def setup_page():
             border: 1px solid #f5f5f4; 
         }
         
-        /* Metric Boxes (The requested "Little Box") */
+        /* Metric Boxes */
         [data-testid="stMetric"] {
             background-color: #ffffff;
             padding: 15px;
@@ -221,12 +221,14 @@ def format_pace(decimal_min):
     return f"{mins}'{secs:02d}\""
 
 def format_duration(decimal_min):
-    if not decimal_min: return "00:00:00"
+    if not decimal_min:
+        return "00:00:00"
     mins = int(decimal_min)
     secs = int((decimal_min - mins) * 60)
     hrs = mins // 60
     rem_mins = mins % 60
-    if hrs > 0: return f"{hrs:02d}:{rem_mins:02d}:{secs:02d}"
+    if hrs > 0:
+        return f"{hrs:02d}:{rem_mins:02d}:{secs:02d}"
     return f"{rem_mins:02d}:{secs:02d}"
 
 def format_sleep(decimal_hours):
@@ -270,6 +272,7 @@ class PhysiologyEngine:
         z4_upper = float(self.zones.get('z4_u', 175))
         time_z5 = zones[4] if len(zones) > 4 else 0
         time_z4 = zones[3] if len(zones) > 3 else 0
+        
         if time_z5 > 5 or (avg_hr > z4_upper): return "anaerobic"
         if time_z4 > 10: return "high"
         return "low"
@@ -279,6 +282,7 @@ class PhysiologyEngine:
         focus_scores = {'low': 0, 'high': 0, 'anaerobic': 0}
 
         if zones and len(self.zones) > 0:
+            # Granular Calculation per Zone using explicit Midpoints
             z1_mid = (self.hr_rest + float(self.zones.get('z1_u', 130))) / 2
             z2_mid = (float(self.zones.get('z2_l', 131)) + float(self.zones.get('z2_u', 145))) / 2
             z3_mid = (float(self.zones.get('z3_l', 146)) + float(self.zones.get('z3_u', 160))) / 2
@@ -299,10 +303,12 @@ class PhysiologyEngine:
                 else: focus_scores['anaerobic'] += segment_load
                 
         elif avg_hr and avg_hr > 0:
+            # Basic Banister
             hr_reserve = max(0.0, min(1.0, (avg_hr - self.hr_rest) / (self.hr_max - self.hr_rest)))
             exponent = 1.92 if self.gender == 'male' else 1.67
             load = duration_min * hr_reserve * 0.64 * math.exp(exponent * hr_reserve)
             
+            # Fallback classification
             z2_upper = float(self.zones.get('z2_u', 145))
             z4_upper = float(self.zones.get('z4_u', 175))
             if avg_hr > z4_upper: focus_scores['anaerobic'] = load
@@ -331,9 +337,23 @@ class PhysiologyEngine:
         elif te >= 4.0 and te < 5.0: label = "Highly Improving"
         elif te >= 5.0: label = "Overreaching"
         return te, label
+    
+    def get_trimp_label(self, trimp):
+        if trimp < 50: return "Light"
+        if trimp < 100: return "Moderate"
+        if trimp < 200: return "Hard"
+        return "Extreme"
 
-    def calculate_training_status(self, activity_history):
-        today = get_malaysia_time().date()
+    def calculate_training_status(self, activity_history, reference_date=None):
+        """
+        Calculates Acute:Chronic Workload Ratio (ACWR) and Status.
+        Supports reference_date to calculate status for a specific point in time.
+        """
+        if reference_date:
+            today = reference_date
+        else:
+            today = get_malaysia_time().date()
+            
         acute_start = today - timedelta(days=6)
         chronic_start = today - timedelta(days=27)
         
@@ -346,6 +366,10 @@ class PhysiologyEngine:
             load = activity.get('load', 0)
             focus = activity.get('focus', {})
             
+            # Only count activities up to the reference date
+            if act_date > today:
+                continue
+                
             if acute_start <= act_date <= today:
                 acute_load += load
             if chronic_start <= act_date <= today:
@@ -369,7 +393,9 @@ class PhysiologyEngine:
             if acute_load > chronic_load_weekly: status = "Productive"; color_class = "status-green"; description = "Building fitness."
             else: status = "Maintaining"; color_class = "status-green"; description = "Load is consistent."
         else:
-            status = "Recovery"; color_class = "status-gray"; description = "Workload is decreasing."
+            status = "Recovery / Detraining"
+            color_class = "status-gray"
+            description = "Workload is decreasing."
             
         total_chronic = chronic_load_total
         targets = {
@@ -421,7 +447,11 @@ def generate_report(start_date, end_date, selected_cats):
                 if r['avgHr'] > 0: metrics.append(f"{r['avgHr']}bpm")
                 line += f" ({', '.join(metrics)})" if metrics else ""
                 report.append(line)
-                physio_info = f"   Load: {int(trimp)} | TE: {te} {te_label}"
+                
+                # Find dominant focus for summary
+                focus_type = max(focus, key=focus.get) if focus else "low"
+                physio_info = f"   Load: {int(trimp)} ({focus_type.title()}) | TE: {te} {te_label}"
+                
                 if r.get('rpe'): physio_info += f" | RPE: {r['rpe']}"
                 report.append(physio_info)
                 if r.get('notes'): report.append(f"   Note: {r['notes']}")
@@ -430,6 +460,7 @@ def generate_report(start_date, end_date, selected_cats):
     if "Gym" in selected_cats:
         gyms = st.session_state.data['gym_sessions']
         period_gyms = [g for g in gyms if start_date <= datetime.strptime(g['date'], '%Y-%m-%d').date() <= end_date]
+        period_gyms.sort(key=lambda x: x['date'])
         if period_gyms:
             report.append(f"GYM ({len(period_gyms)})")
             for g in period_gyms:
@@ -448,6 +479,25 @@ def generate_report(start_date, end_date, selected_cats):
                 sleep_str = format_sleep(s.get('sleepHours', 0))
                 daily_target = engine.get_daily_target(s.get('rhr', 0))
                 report.append(f"- {date_str}: Sleep: {sleep_str} | Readiness: {daily_target['readiness']}")
+    
+    # --- Status Snapshot at End of Report Period ---
+    all_runs = st.session_state.data['runs']
+    history_data = []
+    for r in all_runs:
+        zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
+        trimp, focus = engine.calculate_trimp(float(r['duration']), int(r['avgHr']), zones)
+        history_data.append({'date': r['date'], 'load': trimp, 'focus': focus})
+    
+    # Calculate status relative to the end date of the report
+    status = engine.calculate_training_status(history_data, reference_date=end_date)
+    
+    report.append("")
+    report.append(f"STATUS (As of {end_date})")
+    report.append(f"Status: {status['status']}")
+    report.append(f"ACWR: {status['ratio']} (Acute: {status['acute']} / Chronic: {status['chronic']})")
+    buckets = status['buckets']
+    report.append(f"Focus: Low: {int(buckets['low'])} | High: {int(buckets['high'])} | Anaerobic: {int(buckets['anaerobic'])}")
+
     return "\n".join(report)
 
 # --- Sidebar Navigation ---
