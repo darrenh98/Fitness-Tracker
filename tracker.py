@@ -6,8 +6,6 @@ import json
 import os
 from datetime import datetime, timedelta, date
 import time
-import copy
-import re
 import math
 import streamlit.components.v1 as components
 
@@ -381,12 +379,14 @@ def format_pace(decimal_min):
     return f"{mins}'{secs:02d}\""
 
 def format_duration(decimal_min):
-    if not decimal_min: return "00:00:00"
+    if not decimal_min:
+        return "00:00:00"
     mins = int(decimal_min)
     secs = int((decimal_min - mins) * 60)
     hrs = mins // 60
     rem_mins = mins % 60
-    if hrs > 0: return f"{hrs:02d}:{rem_mins:02d}:{secs:02d}"
+    if hrs > 0:
+        return f"{hrs:02d}:{rem_mins:02d}:{secs:02d}"
     return f"{rem_mins:02d}:{secs:02d}"
 
 def format_sleep(decimal_hours):
@@ -552,64 +552,44 @@ class PhysiologyEngine:
             "feedback": feedback, "total_4w": total_chronic
         }
 
-# --- Report Generation Function ---
 def generate_report(start_date, end_date, selected_cats):
     report = [f"Training & Physio Report"]
     report.append(f"{start_date.strftime('%b %d')} - {end_date.strftime('%b %d')}\n")
     
     engine = PhysiologyEngine(st.session_state.data['user_profile'])
     
-    # 1. FIELD ACTIVITIES & LOAD
     field_types = [t for t in ["Run", "Walk", "Ultimate"] if t in selected_cats]
     
     if field_types:
         runs = st.session_state.data['runs']
-        period_runs = [
-            r for r in runs 
-            if start_date <= datetime.strptime(r['date'], '%Y-%m-%d').date() <= end_date
-            and r['type'] in field_types
-        ]
+        period_runs = [r for r in runs if start_date <= datetime.strptime(r['date'], '%Y-%m-%d').date() <= end_date and r['type'] in field_types]
         period_runs.sort(key=lambda x: x['date'])
         
         if period_runs:
             total_dist = sum(r['distance'] for r in period_runs)
             total_time = sum(r['duration'] for r in period_runs)
-            
             report.append(f"ACTIVITIES ({len(period_runs)})")
             report.append(f"Totals: {total_dist:.1f} km | {format_duration(total_time)}")
             report.append("")
-            
             for r in period_runs:
                 zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
                 trimp, focus = engine.calculate_trimp(float(r['duration']), int(r['avgHr']), zones)
-                # Find dominant focus type
-                focus_type = max(focus, key=focus.get) if focus else "low"
                 te, te_label = engine.get_training_effect(trimp)
-                
                 line = f"- {r['date'][5:]}: {r['type']} {r['distance']}km @ {format_duration(r['duration'])}"
-                
                 metrics = []
                 if r['distance'] > 0 and r['type'] != 'Ultimate': metrics.append(f"{format_pace(r['duration']/r['distance'])}/km")
                 if r['avgHr'] > 0: metrics.append(f"{r['avgHr']}bpm")
-                
                 line += f" ({', '.join(metrics)})" if metrics else ""
-                
                 report.append(line)
-                
-                physio_info = f"   Load: {int(trimp)} ({focus_type.title()}) | TE: {te} {te_label}"
+                physio_info = f"   Load: {int(trimp)} | TE: {te} {te_label}"
                 if r.get('rpe'): physio_info += f" | RPE: {r['rpe']}"
-                if r.get('feel'): physio_info += f" | Feel: {r['feel']}"
                 report.append(physio_info)
-                
                 if r.get('notes'): report.append(f"   Note: {r['notes']}")
             report.append("")
     
-    # 2. GYM
     if "Gym" in selected_cats:
         gyms = st.session_state.data['gym_sessions']
         period_gyms = [g for g in gyms if start_date <= datetime.strptime(g['date'], '%Y-%m-%d').date() <= end_date]
-        period_gyms.sort(key=lambda x: x['date'])
-        
         if period_gyms:
             report.append(f"GYM ({len(period_gyms)})")
             for g in period_gyms:
@@ -617,103 +597,31 @@ def generate_report(start_date, end_date, selected_cats):
                 report.append(f"- {g['date'][5:]}: {g['routineName']} (Vol: {vol:.0f}kg)")
             report.append("")
 
-    # 3. HEALTH & RECOVERY
     if "Stats" in selected_cats:
         stats = st.session_state.data['health_logs']
         period_stats = [s for s in stats if start_date <= datetime.strptime(s['date'], '%Y-%m-%d').date() <= end_date]
-        period_stats.sort(key=lambda x: x['date']) # Sort chronologically
-        
+        period_stats.sort(key=lambda x: x['date'])
         if period_stats:
             report.append(f"HEALTH LOG")
-            
             for s in period_stats:
                 date_str = s['date'][5:]
-                rhr = s.get('rhr', 0)
-                hrv = s.get('hrv', 0)
-                sleep_dec = s.get('sleepHours', 0)
-                sleep_str = format_sleep(sleep_dec)
-                
-                daily_target = engine.get_daily_target(rhr)
-                readiness = daily_target['readiness']
-                
-                report.append(f"- {date_str}: Sleep: {sleep_str} | HRV: {hrv} | RHR: {rhr} | Readiness: {readiness}")
-            report.append("")
-
-    # 4. TRAINING STATUS SNAPSHOT (Based on End Date)
-    all_runs = st.session_state.data['runs']
-    history_data = []
-    for r in all_runs:
-        zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
-        trimp, focus = engine.calculate_trimp(float(r['duration']), int(r['avgHr']), zones)
-        history_data.append({'date': r['date'], 'load': trimp, 'focus': focus})
-    
-    status = engine.calculate_training_status(history_data)
-    
-    report.append(f"CURRENT STATUS")
-    report.append(f"Status: {status['status']}")
-    report.append(f"ACWR: {status['ratio']} (Acute: {status['acute']} / Chronic: {status['chronic']})")
-    
-    buckets = status['buckets']
-    report.append(f"Focus: Low: {int(buckets['low'])} | High: {int(buckets['high'])} | Anaerobic: {int(buckets['anaerobic'])}")
-
+                sleep_str = format_sleep(s.get('sleepHours', 0))
+                daily_target = engine.get_daily_target(s.get('rhr', 0))
+                report.append(f"- {date_str}: Sleep: {sleep_str} | Readiness: {daily_target['readiness']}")
     return "\n".join(report)
-
-# --- UI Render Functions ---
-def setup_page():
-    st.markdown("""
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-        @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200');
-        html, body, [class*="css"] { font-family: 'Inter', sans-serif; color: #44403c; }
-        .stApp { background-color: #fafaf9; }
-        .material-symbols-rounded { font-size: 1.1rem; vertical-align: middle; color: #78716c; }
-        h1, h2, h3 { font-weight: 800 !important; letter-spacing: -0.025em; color: #292524; }
-        .stCard, [data-testid="stForm"] { background-color: #ffffff; padding: 1.5rem; border-radius: 1rem; box-shadow: 0 4px 6px -1px rgba(68, 64, 60, 0.05); border: 1px solid #f5f5f4; }
-        [data-testid="stVerticalBlock"] > [style*="flex-direction: column;"] > [data-testid="stVerticalBlock"] > [data-testid="stContainer"] {
-            background-color: #ffffff; padding: 1.25rem; border-radius: 0.75rem; border: 1px solid #e7e5e4; margin-bottom: 1.0rem; box-shadow: 0 1px 2px 0 rgba(68, 64, 60, 0.05);
-        }
-        /* Boxing every metric for dashboard feel */
-        [data-testid="stMetric"] {
-            background-color: #ffffff;
-            padding: 15px;
-            border-radius: 12px;
-            box-shadow: 0 1px 3px 0 rgba(0,0,0,0.05);
-            border: 1px solid #e7e5e4;
-            text-align: center;
-        }
-        [data-testid="stMetricValue"] { font-size: 1.6rem; font-weight: 800; color: #44403c; }
-        [data-testid="stMetricLabel"] { font-size: 0.75rem; font-weight: 600; color: #a8a29e; letter-spacing: 0.05em; text-transform: uppercase; }
-        .history-label { font-size: 0.7rem; text-transform: uppercase; color: #a8a29e; font-weight: 600; margin-bottom: 0px; }
-        .history-value { font-size: 1rem; font-weight: 600; color: #57534e; }
-        .history-sub { font-size: 0.85rem; color: #78716c; }
-        .stTextInput input, .stNumberInput input, .stSelectbox select, .stDateInput input, .stTextArea textarea { border-radius: 8px; border: 1px solid #e7e5e4; padding: 0.75rem; background-color: #fff; color: #44403c; }
-        .stButton button { border-radius: 8px; font-weight: 500; padding: 0.4rem 0.8rem; border: 1px solid #e7e5e4; background-color: #ffffff; color: #57534e; }
-        .stButton button:hover { border-color: #c2410c; color: #c2410c; background-color: #fff7ed; }
-        [data-testid="stFormSubmitButton"] button { background-color: #c2410c; color: white; padding: 0.6rem 1.2rem; width: 100%; border: none; }
-        [data-testid="stFormSubmitButton"] button:hover { background-color: #9a3412; }
-        .streamlit-expanderHeader { font-weight: 600; color: #44403c; border-radius: 8px; background-color: #ffffff; }
-        [data-testid="stRadio"] > div { flex-direction: row; gap: 10px; flex-wrap: wrap; }
-        @media only screen and (max-width: 600px) { .stCard, [data-testid="stForm"] { padding: 1rem; } [data-testid="stMetricValue"] { font-size: 1.4rem; } [data-testid="stVerticalBlock"] > [style*="flex-direction: column;"] > [data-testid="stVerticalBlock"] > [data-testid="stContainer"] { padding: 0.75rem; } }
-        .status-badge { padding: 4px 12px; border-radius: 20px; font-weight: 700; font-size: 0.8rem; display: inline-block; }
-        .status-red { background-color: #fecaca; color: #991b1b; }
-        .status-orange { background-color: #ffedd5; color: #c2410c; }
-        .status-green { background-color: #dcfce7; color: #166534; }
-        .status-gray { background-color: #f5f5f4; color: #78716c; }
-        .daily-target { background-color: #ffffff; border-radius: 12px; padding: 1.5rem; border: 1px solid #e7e5e4; margin-top: 1rem; }
-        .target-header { font-size: 1.1rem; font-weight: 800; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 8px; }
-        .target-load { font-size: 1.2rem; font-weight: 700; color: #c2410c; margin: 0.5rem 0; }
-        .load-bar-container { position: relative; height: 24px; background-color: #f5f5f4; border-radius: 12px; margin-bottom: 8px; margin-top: 4px; }
-        .load-bar-fill { height: 100%; border-radius: 12px; position: absolute; left: 0; top: 0; }
-        .load-bar-target { position: absolute; height: 100%; border: 2px solid #44403c; border-radius: 12px; top: 0; pointer-events: none; box-sizing: border-box; }
-        .load-label { font-size: 0.75rem; font-weight: 600; color: #78716c; margin-bottom: 2px; display: flex; justify-content: space-between; }
-    </style>
-    """, unsafe_allow_html=True)
 
 def render_sidebar():
     with st.sidebar:
         st.title(":material/sprint: RunLog Hub")
         malaysia_time = get_malaysia_time()
         st.caption(f"🇲🇾 {malaysia_time.strftime('%d %b %Y, %H:%M')}")
+        
+        # Connection Indicator
+        if db:
+             st.caption("🟢 Connected to Firestore")
+        else:
+             st.caption("🟠 Local Storage (Offline)")
+             
         selected_tab = st.radio("Navigate", ["Training Status", "Cardio Training", "Gym", "Plan", "Trends", "Share"], label_visibility="collapsed")
         st.divider()
         with st.expander("👤 Athlete Profile"):
@@ -743,12 +651,16 @@ def render_sidebar():
             z4_u = c_z4u.number_input("Z4 Upper", value=int(cz.get('z4_u', 175)))
             z5_l = st.number_input("Z5 Lower", value=int(cz.get('z5_l', 176)))
             if st.button("Save Profile"):
-                st.session_state.data['user_profile'].update({
+                new_prof = {
                     'weight': new_weight, 'height': new_height, 'gender': gender,
-                    'hrMax': hr_max, 'hrRest': m_rhr, 'vo2Max': vo2, 'monthAvgRHR': m_rhr, 'monthAvgHRV': m_hrv,
+                    'hrMax': hr_max, 'hrRest': m_rhr, 'vo2Max': vo2, 
+                    'monthAvgRHR': m_rhr, 'monthAvgHRV': m_hrv,
                     'zones': {"z1_u": z1_u, "z2_l": z2_l, "z2_u": z2_u, "z3_l": z3_l, "z3_u": z3_u, "z4_l": z4_l, "z4_u": z4_u, "z5_l": z5_l}
-                })
-                persist(); st.success("Saved!")
+                }
+                st.session_state.data['user_profile'].update(new_prof)
+                if db: db.collection("settings").document("profile").set(new_prof)
+                else: save_data(st.session_state.data)
+                st.success("Saved!")
         return selected_tab
 
 def render_training_status():
@@ -865,20 +777,16 @@ def render_cardio():
     setup_page()
     runs_df = pd.DataFrame(st.session_state.data['runs'])
     engine = PhysiologyEngine(st.session_state.data['user_profile'])
-    
     if 'run_log_success' in st.session_state and st.session_state.run_log_success:
         st.toast("✅ Activity Logged Successfully!")
         st.session_state.run_log_success = False
-
     edit_run_id = st.session_state.get('edit_run_id', None)
     if 'form_act_type' not in st.session_state: st.session_state.form_act_type = "Run"
-    
     def_type = st.session_state.form_act_type
     def_date = get_malaysia_time()
     def_dist, def_dur, def_hr, def_cad, def_pwr = 0.0, 0.0, 0, 0, 0
     def_notes, def_feel, def_rpe = "", "Normal", 5
     def_z1, def_z2, def_z3, def_z4, def_z5 = "", "", "", "", ""
-    
     if edit_run_id:
         run_data = next((r for r in st.session_state.data['runs'] if str(r['id']) == str(edit_run_id)), None)
         if run_data:
@@ -898,10 +806,8 @@ def render_cardio():
             def_z4 = format_duration(run_data.get('z4', 0))
             def_z5 = format_duration(run_data.get('z5', 0))
             scroll_to_top()
-
     form_label = f":material/edit: Edit Activity" if edit_run_id else ":material/add_circle: Log Activity"
     expander_state = True if edit_run_id else False
-
     with st.expander(form_label, expanded=expander_state):
         key_suffix = f"{edit_run_id}" if edit_run_id else "new"
         with st.form("run_form", clear_on_submit=True):
@@ -947,28 +853,20 @@ def render_cardio():
             feel = st.radio("Feel", ["Good", "Normal", "Tired", "Pain"], index=feel_idx, horizontal=True, label_visibility="collapsed", key=f"feel_{key_suffix}")
             st.caption("Notes")
             notes = st.text_area("Notes", value=def_notes, placeholder="Easy run, felt strong...", height=3, label_visibility="collapsed", key=f"notes_{key_suffix}")
-            
             if st.form_submit_button("Update Activity" if edit_run_id else "Save Activity"):
                 new_id = str(int(time.time()))
                 doc_id = str(edit_run_id) if edit_run_id else new_id
                 dist_save = dist if dist is not None else 0.0
                 run_obj = {
-                    "id": doc_id, "date": str(act_date), "type": act_type, "distance": dist_save, 
-                    "duration": parse_time_input(dur_str), "avgHr": hr, "rpe": rpe, "feel": feel, 
-                    "cadence": cadence, "power": power,
-                    "z1": parse_time_input(z1), "z2": parse_time_input(z2), "z3": parse_time_input(z3), 
-                    "z4": parse_time_input(z4), "z5": parse_time_input(z5), "notes": notes
+                    "id": doc_id, "date": str(act_date), "type": act_type, "distance": dist_save, "duration": parse_time_input(dur_str), "avgHr": hr, "rpe": rpe, "feel": feel, "cadence": cadence, "power": power, "z1": parse_time_input(z1), "z2": parse_time_input(z2), "z3": parse_time_input(z3), "z4": parse_time_input(z4), "z5": parse_time_input(z5), "notes": notes
                 }
-                
                 if db: db.collection("runs").document(doc_id).set(run_obj)
-                
                 if edit_run_id:
                     idx = next((i for i, r in enumerate(st.session_state.data['runs']) if str(r['id']) == str(edit_run_id)), -1)
                     if idx != -1: st.session_state.data['runs'][idx] = run_obj
                     st.session_state.edit_run_id = None; st.session_state.run_log_success = True
                 else:
                     st.session_state.data['runs'].insert(0, run_obj); st.session_state.run_log_success = True
-                
                 if not db: save_data(st.session_state.data)
                 persist(); st.rerun()
         if edit_run_id:
@@ -1117,9 +1015,6 @@ def render_gym():
                         new_r = {"id": int(time.time()), "name": r_name, "exercises": ex_list}
                         st.session_state.data['routines'].append(new_r)
                         if db: 
-                            # Load existing, append, save back (simple array simulation)
-                            # Or ideally use subcollections. Sticking to simple array in single doc for now per load_data logic
-                            # Actually load_data uses 'settings/routines'. Let's update that doc.
                             routines_doc = db.collection("settings").document("routines").get()
                             current_list = routines_doc.to_dict().get('list', []) if routines_doc.exists else []
                             current_list.append(new_r)
@@ -1128,15 +1023,12 @@ def render_gym():
                             persist()
                         st.success("Routine Created!")
                         st.rerun()
-                
                 for r in st.session_state.data['routines']:
                     c1, c2 = st.columns([5, 1])
-                    c1.markdown(f"**{r['name']}**")
-                    c1.caption(" • ".join(r['exercises']))
+                    c1.markdown(f"**{r['name']}**"); c1.caption(" • ".join(r['exercises']))
                     if c2.button(":material/delete:", key=f"del_rout_{r['id']}"):
                         st.session_state.data['routines'] = [x for x in st.session_state.data['routines'] if x['id'] != r['id']]
                         if db:
-                             # Re-save list minus deleted
                              db.collection("settings").document("routines").set({'list': st.session_state.data['routines']})
                         else: persist()
                         st.rerun()
@@ -1214,12 +1106,10 @@ def render_gym():
                 current_ex_names.append(ex['name'])
         new_session = {"id": str(int(time.time())), "date": str(aw['date']), "routineName": aw['routine_name'], "exercises": final_exercises, "totalVolume": total_vol}
         if c1.button(":material/update: Save & Update Routine"):
-            # Update Routine in memory & DB
             for r in st.session_state.data['routines']:
                 if r['id'] == aw['routine_id']: r['exercises'] = current_ex_names; break
             if db: db.collection("settings").document("routines").set({'list': st.session_state.data['routines']})
             
-            # Save Session
             st.session_state.data['gym_sessions'].insert(0, new_session)
             if db: db.collection("gym_sessions").document(new_session['id']).set(new_session)
             
@@ -1231,6 +1121,48 @@ def render_gym():
             persist()
             st.session_state.active_workout = None; st.session_state.gym_save_dialog = False; st.success("Workout logged!"); st.rerun()
         if st.button("Go Back"): st.session_state.gym_save_dialog = False; st.rerun()
+
+def render_plan():
+    st.header(":material/calendar_month: Training Plan")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.container(border=True).markdown("**Macrocycle (Annual)**")
+        macro = st.text_area("Annual Goal", value=st.session_state.data['cycles']['macro'], height=120, key="txt_macro", label_visibility="collapsed")
+        if macro != st.session_state.data['cycles']['macro']:
+            st.session_state.data['cycles']['macro'] = macro
+            if db: db.collection("settings").document("plan").set({'cycles': st.session_state.data['cycles']}, merge=True)
+            else: persist()
+    with c2:
+        st.container(border=True).markdown("**Mesocycle (Block)**")
+        meso = st.text_area("Block Focus", value=st.session_state.data['cycles']['meso'], height=120, key="txt_meso", label_visibility="collapsed")
+        if meso != st.session_state.data['cycles']['meso']:
+            st.session_state.data['cycles']['meso'] = meso
+            if db: db.collection("settings").document("plan").set({'cycles': st.session_state.data['cycles']}, merge=True)
+            else: persist()
+    with c3:
+        st.container(border=True).markdown("**Microcycle (Week)**")
+        micro = st.text_area("Weekly Focus", value=st.session_state.data['cycles']['micro'], height=120, key="txt_micro", label_visibility="collapsed")
+        if micro != st.session_state.data['cycles']['micro']:
+            st.session_state.data['cycles']['micro'] = micro
+            if db: db.collection("settings").document("plan").set({'cycles': st.session_state.data['cycles']}, merge=True)
+            else: persist()
+    st.subheader("Weekly Schedule")
+    days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+    cols = st.columns(7)
+    today_name = get_malaysia_time().strftime("%A")
+    for i, day in enumerate(days):
+        with cols[i]:
+            border_color = "#f97316" if day == today_name else "#e2e8f0"
+            with st.container(border=True):
+                if day == today_name: st.markdown(f"<div style='color:#c2410c; font-weight:bold;'>{day.upper()}</div>", unsafe_allow_html=True)
+                else: st.caption(day.upper())
+                am_val = st.text_input("AM", value=st.session_state.data['weekly_plan'][day]['am'], key=f"am_{day}", placeholder="Rest", label_visibility="collapsed")
+                pm_val = st.text_input("PM", value=st.session_state.data['weekly_plan'][day]['pm'], key=f"pm_{day}", placeholder="Rest", label_visibility="collapsed")
+                if (am_val != st.session_state.data['weekly_plan'][day]['am'] or pm_val != st.session_state.data['weekly_plan'][day]['pm']):
+                    st.session_state.data['weekly_plan'][day]['am'] = am_val
+                    st.session_state.data['weekly_plan'][day]['pm'] = pm_val
+                    if db: db.collection("settings").document("plan").set({'weekly_plan': st.session_state.data['weekly_plan']}, merge=True)
+                    else: persist()
 
 def render_trends():
     st.header(":material/trending_up: Progress & Trends")
@@ -1301,48 +1233,6 @@ def render_share():
         if st.button("📄 Generate Text Report", type="primary"):
             report_text = generate_report(start_r, end_r, st.session_state.share_cats)
             st.text_area("Copy this text:", value=report_text, height=400)
-
-def render_plan():
-    st.header(":material/calendar_month: Training Plan")
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.container(border=True).markdown("**Macrocycle (Annual)**")
-        macro = st.text_area("Annual Goal", value=st.session_state.data['cycles']['macro'], height=120, key="txt_macro", label_visibility="collapsed")
-        if macro != st.session_state.data['cycles']['macro']:
-            st.session_state.data['cycles']['macro'] = macro
-            if db: db.collection("settings").document("plan").set({'cycles': st.session_state.data['cycles']}, merge=True)
-            else: persist()
-    with c2:
-        st.container(border=True).markdown("**Mesocycle (Block)**")
-        meso = st.text_area("Block Focus", value=st.session_state.data['cycles']['meso'], height=120, key="txt_meso", label_visibility="collapsed")
-        if meso != st.session_state.data['cycles']['meso']:
-            st.session_state.data['cycles']['meso'] = meso
-            if db: db.collection("settings").document("plan").set({'cycles': st.session_state.data['cycles']}, merge=True)
-            else: persist()
-    with c3:
-        st.container(border=True).markdown("**Microcycle (Week)**")
-        micro = st.text_area("Weekly Focus", value=st.session_state.data['cycles']['micro'], height=120, key="txt_micro", label_visibility="collapsed")
-        if micro != st.session_state.data['cycles']['micro']:
-            st.session_state.data['cycles']['micro'] = micro
-            if db: db.collection("settings").document("plan").set({'cycles': st.session_state.data['cycles']}, merge=True)
-            else: persist()
-    st.subheader("Weekly Schedule")
-    days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-    cols = st.columns(7)
-    today_name = get_malaysia_time().strftime("%A")
-    for i, day in enumerate(days):
-        with cols[i]:
-            border_color = "#f97316" if day == today_name else "#e2e8f0"
-            with st.container(border=True):
-                if day == today_name: st.markdown(f"<div style='color:#c2410c; font-weight:bold;'>{day.upper()}</div>", unsafe_allow_html=True)
-                else: st.caption(day.upper())
-                am_val = st.text_input("AM", value=st.session_state.data['weekly_plan'][day]['am'], key=f"am_{day}", placeholder="Rest", label_visibility="collapsed")
-                pm_val = st.text_input("PM", value=st.session_state.data['weekly_plan'][day]['pm'], key=f"pm_{day}", placeholder="Rest", label_visibility="collapsed")
-                if (am_val != st.session_state.data['weekly_plan'][day]['am'] or pm_val != st.session_state.data['weekly_plan'][day]['pm']):
-                    st.session_state.data['weekly_plan'][day]['am'] = am_val
-                    st.session_state.data['weekly_plan'][day]['pm'] = pm_val
-                    if db: db.collection("settings").document("plan").set({'weekly_plan': st.session_state.data['weekly_plan']}, merge=True)
-                    else: persist()
 
 # --- Main App Logic ---
 def main():
