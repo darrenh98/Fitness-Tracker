@@ -886,6 +886,7 @@ def render_training_status():
     st.subheader("Load Focus (4 weeks)")
     buckets = status_data['buckets']
     targets = status_data['targets']
+    total_4w = status_data['total_4w']
     max_scale = max(targets['low']['max'], buckets['low'], 1) * 1.2
     def draw_focus_bar(label, current, t_min, t_max, color):
         curr_pct = min((current / max_scale) * 100, 100)
@@ -1108,6 +1109,120 @@ def render_cardio():
                             st.markdown(bar_html, unsafe_allow_html=True)
                         if row.get('notes'): st.markdown(f"<div style='margin-top:5px; font-size:0.85rem; color:#475569;'>📝 {row['notes']}</div>", unsafe_allow_html=True)
             else: st.info("No activities found for this category.")
+
+def render_gym():
+    st.header(":material/fitness_center: Gym & Weights")
+    if 'active_workout' not in st.session_state: st.session_state.active_workout = None
+    if 'gym_save_dialog' not in st.session_state: st.session_state.gym_save_dialog = False
+
+    if st.session_state.active_workout is None and not st.session_state.gym_save_dialog:
+        col_rout, col_hist = st.tabs(["Start Workout", "History"])
+        with col_rout:
+            st.subheader("Start from Routine")
+            routine_opts = {r['name']: r for r in st.session_state.data['routines']}
+            if routine_opts:
+                sel_r_name = st.selectbox("Select Routine", list(routine_opts.keys()))
+                if st.button(":material/play_arrow: Start Workout", use_container_width=True):
+                    selected = routine_opts[sel_r_name]
+                    exercises_prep = [{"name": ex_name, "sets": [{"reps": "", "weight": ""} for _ in range(3)]} for ex_name in selected['exercises']]
+                    st.session_state.active_workout = {"routine_id": selected['id'], "routine_name": selected['name'], "date": datetime.now().date(), "exercises": exercises_prep}
+                    st.rerun()
+            else: st.info("No routines found. Create one below.")
+            st.divider()
+            with st.expander("Manage Routines"):
+                with st.form("new_routine"):
+                    r_name = st.text_input("Routine Name (e.g., Pull Day)")
+                    r_exs = st.text_area("Exercises (comma separated)", placeholder="Pullups, Rows, Curls")
+                    if st.form_submit_button("Create Routine"):
+                        ex_list = [x.strip() for x in r_exs.split(",") if x.strip()]
+                        new_r = {"id": int(time.time()), "name": r_name, "exercises": ex_list}
+                        st.session_state.data['routines'].append(new_r); persist(); st.success("Routine Created!"); st.rerun()
+                for r in st.session_state.data['routines']:
+                    c1, c2 = st.columns([5, 1])
+                    c1.markdown(f"**{r['name']}**"); c1.caption(" • ".join(r['exercises']))
+                    if c2.button(":material/delete:", key=f"del_rout_{r['id']}"):
+                        st.session_state.data['routines'] = [x for x in st.session_state.data['routines'] if x['id'] != r['id']]; persist(); st.rerun()
+        with col_hist:
+            sessions = st.session_state.data['gym_sessions']
+            if sessions:
+                total_vol_all = sum(s.get('totalVolume', 0) for s in sessions)
+                with st.container(border=True): st.metric("Total Volume Lifted", f"{total_vol_all/1000:.1f}k kg")
+                st.divider()
+                for s in sessions:
+                    with st.container():
+                        c1, c2, c3 = st.columns([3, 4, 1])
+                        c1.markdown(f"**{s['date']}**"); c1.caption(s['routineName'])
+                        details = ", ".join([f"{ex['name']} ({len(ex['sets'])})" for ex in s['exercises']])
+                        c2.caption(details); c2.text(f"Vol: {s.get('totalVolume',0)}kg")
+                        if c3.button(":material/delete:", key=f"del_sess_{s['id']}"):
+                            st.session_state.data['gym_sessions'] = [x for x in st.session_state.data['gym_sessions'] if x['id'] != s['id']]; persist(); st.rerun()
+            else: st.info("No gym sessions logged.")
+
+    elif st.session_state.active_workout is not None and not st.session_state.gym_save_dialog:
+        aw = st.session_state.active_workout
+        c_head, c_canc = st.columns([3, 1])
+        c_head.subheader(f":material/fitness_center: {aw['routine_name']}")
+        if c_canc.button("Cancel"): st.session_state.active_workout = None; st.rerun()
+        aw['date'] = st.date_input("Date", aw['date'])
+        st.divider()
+        exercises_to_remove = []
+        for i, ex in enumerate(aw['exercises']):
+            with st.container(border=True):
+                ch1, ch2, ch3 = st.columns([3, 3, 1])
+                new_name = ch1.text_input(f"Exercise {i+1}", value=ex['name'], key=f"ex_name_{i}")
+                ex['name'] = new_name
+                last_stats = get_last_lift_stats(new_name)
+                if last_stats: ch2.info(f"Last: {last_stats}")
+                else: ch2.caption("No history found")
+                if ch3.button(":material/delete:", key=f"del_ex_{i}"): exercises_to_remove.append(i)
+                st.markdown("""<div style="display:grid; grid-template-columns: 1fr 1fr 0.5fr; gap:10px; font-size:0.8rem; font-weight:600; color:#64748b; margin-bottom:5px;"><div>REPS</div><div>WEIGHT (kg)</div><div></div></div>""", unsafe_allow_html=True)
+                sets_to_remove = []
+                for j, s in enumerate(ex['sets']):
+                    c_reps, c_w, c_del = st.columns([1, 1, 0.5])
+                    s['reps'] = c_reps.text_input("Reps", value=s['reps'], key=f"r_{i}_{j}", label_visibility="collapsed", placeholder="10")
+                    s['weight'] = c_w.text_input("Weight", value=s['weight'], key=f"w_{i}_{j}", label_visibility="collapsed", placeholder="50")
+                    if c_del.button(":material/close:", key=f"del_set_{i}_{j}"): sets_to_remove.append(j)
+                if sets_to_remove:
+                    for index in sorted(sets_to_remove, reverse=True): del ex['sets'][index]
+                    st.rerun()
+                if st.button(f":material/add: Add Set", key=f"add_set_{i}"): ex['sets'].append({"reps": "", "weight": ""}); st.rerun()
+        if exercises_to_remove:
+            for index in sorted(exercises_to_remove, reverse=True): del aw['exercises'][index]
+            st.rerun()
+        if st.button(":material/add_circle: Add New Exercise"): aw['exercises'].append({"name": "New Exercise", "sets": [{"reps": "", "weight": ""} for _ in range(3)]}); st.rerun()
+        st.divider()
+        if st.button(":material/check_circle: Finish Workout", type="primary", use_container_width=True): st.session_state.gym_save_dialog = True; st.rerun()
+
+    elif st.session_state.gym_save_dialog:
+        st.subheader("🎉 Workout Complete!")
+        st.info("You modified the routine structure. Would you like to update the original routine?")
+        aw = st.session_state.active_workout
+        c1, c2 = st.columns(2)
+        final_exercises = []
+        total_vol = 0
+        current_ex_names = []
+        for ex in aw['exercises']:
+            clean_sets = []
+            for s in ex['sets']:
+                try:
+                    r_val = float(s['reps'])
+                    w_val = float(s['weight'])
+                    clean_sets.append({"reps": s['reps'], "weight": s['weight']})
+                    total_vol += r_val * w_val
+                except: continue
+            if clean_sets:
+                final_exercises.append({"name": ex['name'], "sets": clean_sets})
+                current_ex_names.append(ex['name'])
+        new_session = {"id": int(time.time()), "date": str(aw['date']), "routineName": aw['routine_name'], "exercises": final_exercises, "totalVolume": total_vol}
+        if c1.button(":material/update: Save & Update Routine"):
+            for r in st.session_state.data['routines']:
+                if r['id'] == aw['routine_id']: r['exercises'] = current_ex_names; break
+            st.session_state.data['gym_sessions'].insert(0, new_session); persist()
+            st.session_state.active_workout = None; st.session_state.gym_save_dialog = False; st.success("Routine updated and workout logged!"); st.rerun()
+        if c2.button(":material/save: Just Save Session"):
+            st.session_state.data['gym_sessions'].insert(0, new_session); persist()
+            st.session_state.active_workout = None; st.session_state.gym_save_dialog = False; st.success("Workout logged!"); st.rerun()
+        if st.button("Go Back"): st.session_state.gym_save_dialog = False; st.rerun()
 
 def render_trends():
     st.header(":material/trending_up: Progress & Trends")
