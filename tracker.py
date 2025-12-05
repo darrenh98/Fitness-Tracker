@@ -6,6 +6,8 @@ import json
 import os
 from datetime import datetime, timedelta, date
 import time
+import copy  # Added missing import
+import re
 import math
 import streamlit.components.v1 as components
 
@@ -464,6 +466,7 @@ class PhysiologyEngine:
             exponent = 1.92 if self.gender == 'male' else 1.67
             load = duration_min * hr_reserve * 0.64 * math.exp(exponent * hr_reserve)
             
+            # Fallback classification
             z2_upper = float(self.zones.get('z2_u', 145))
             z4_upper = float(self.zones.get('z4_u', 175))
             if avg_hr > z4_upper: focus_scores['anaerobic'] = load
@@ -485,6 +488,7 @@ class PhysiologyEngine:
         scaling = self.vo2_max * 1.5
         if scaling == 0: return 0.0, "None"
         te = round(min(5.0, trimp_score / scaling), 1)
+        
         label = "Recovery"
         if te >= 1.0 and te < 2.0: label = "Maintaining"
         elif te >= 2.0 and te < 3.0: label = "Productive"
@@ -650,6 +654,7 @@ def render_sidebar():
             z4_l = c_z4l.number_input("Z4 Lower", value=int(cz.get('z4_l', 161)))
             z4_u = c_z4u.number_input("Z4 Upper", value=int(cz.get('z4_u', 175)))
             z5_l = st.number_input("Z5 Lower", value=int(cz.get('z5_l', 176)))
+
             if st.button("Save Profile"):
                 new_prof = {
                     'weight': new_weight, 'height': new_height, 'gender': gender,
