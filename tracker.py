@@ -4,9 +4,9 @@ import plotly.express as px
 import plotly.graph_objects as go
 import json
 import os
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 import time
-import copy  # Added missing import
+import copy
 import re
 import math
 import streamlit.components.v1 as components
@@ -17,20 +17,17 @@ from firebase_admin import credentials, firestore
 
 # Initialize Firebase (Server-side)
 if not firebase_admin._apps:
-    # Try/Except to handle cases where secrets might not be set yet
     try:
         key_dict = dict(st.secrets["firebase"])
         cred = credentials.Certificate(key_dict)
         firebase_admin.initialize_app(cred)
     except Exception as e:
-        # Just pass, we will handle db=None later
         pass
 
-# Get DB client
 try:
     db = firestore.client()
 except:
-    db = None # Handle offline/config error mode gracefully
+    db = None
 
 # --- Configuration & Styling ---
 st.set_page_config(
@@ -40,230 +37,82 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS
-st.markdown("""
-<style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-    @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200');
-
-    html, body, [class*="css"] {
-        font-family: 'Inter', sans-serif;
-        color: #1e293b;
-    }
-
-    .stApp {
-        background-color: #f8fafc;
-    }
-
-    /* Material Icon Class for HTML usage */
-    .material-symbols-rounded {
-        font-family: 'Material Symbols Rounded';
-        font-weight: normal;
-        font-style: normal;
-        font-size: 1.2rem;
-        line-height: 1;
-        letter-spacing: normal;
-        text-transform: none;
-        display: inline-block;
-        white-space: nowrap;
-        word-wrap: normal;
-        direction: ltr;
-        vertical-align: middle;
-        color: #64748b;
-    }
-
-    /* Headers */
-    h1, h2, h3 {
-        font-weight: 800 !important;
-        letter-spacing: -0.025em;
-        color: #0f172a;
-    }
-
-    /* Modern Cards/Containers */
-    .stCard, [data-testid="stForm"] {
-        background-color: #ffffff;
-        padding: 1.5rem;
-        border-radius: 1rem;
-        box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05), 0 2px 4px -2px rgb(0 0 0 / 0.05);
-        border: none;
-        transition: box-shadow 0.2s ease-in-out, transform 0.2s ease-in-out;
-    }
-    
-    /* List Item Containers */
-    [data-testid="stVerticalBlock"] > [style*="flex-direction: column;"] > [data-testid="stVerticalBlock"] > [data-testid="stContainer"] {
-        background-color: #ffffff;
-        padding: 1.25rem;
-        border-radius: 0.75rem;
-        border: 1px solid #e2e8f0; /* Slightly darker border for better visibility */
-        margin-bottom: 1.0rem;
-        box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.05);
-    }
-
-    /* Metrics Styling */
-    [data-testid="stMetricValue"] {
-        font-size: 1.8rem;
-        font-weight: 800;
-        color: #0f172a;
-        letter-spacing: -0.02em;
-    }
-    [data-testid="stMetricLabel"] {
-        font-size: 0.75rem;
-        font-weight: 600;
-        color: #64748b;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-    }
-    
-    /* Caption styling for history rows */
-    .history-label {
-        font-size: 0.7rem;
-        text-transform: uppercase;
-        color: #94a3b8;
-        font-weight: 600;
-        margin-bottom: 0px;
-    }
-    .history-value {
-        font-size: 1rem;
-        font-weight: 600;
-        color: #334155;
-    }
-    .history-sub {
-        font-size: 0.85rem;
-        color: #64748b;
-    }
-
-    /* Inputs and Selects */
-    .stTextInput input, .stNumberInput input, .stSelectbox select, .stDateInput input, .stTextArea textarea {
-        border-radius: 8px;
-        border: 1px solid #e2e8f0;
-        padding: 0.75rem;
-        background-color: #fff;
-    }
-    
-    /* Buttons */
-    .stButton button {
-        border-radius: 8px;
-        font-weight: 500;
-        padding: 0.4rem 0.8rem;
-        border: none;
-        transition: all 0.2s;
-    }
-    /* Primary form submit buttons */
-    [data-testid="stFormSubmitButton"] button {
-        background-color: #0f172a;
-        color: white;
-        padding: 0.6rem 1.2rem;
-        width: 100%; /* Full width for mobile friendliness */
-    }
-    [data-testid="stFormSubmitButton"] button:hover {
-        background-color: #1e293b;
-        box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
-    }
-
-    /* Expander headers */
-    .streamlit-expanderHeader {
-        font-weight: 600;
-        color: #334155;
-        border-radius: 8px;
-        background-color: #ffffff;
-    }
-
-    /* Quick-Tap Radio Buttons (Chips look) */
-    [data-testid="stRadio"] > div {
-        flex-direction: row;
-        gap: 10px;
-        flex-wrap: wrap;
-    }
-
-    /* --- MOBILE OPTIMIZATIONS --- */
-    @media only screen and (max-width: 600px) {
-        .stCard, [data-testid="stForm"] {
-            padding: 1rem;
+# --- UI Setup Function (Defined Globally) ---
+def setup_page():
+    st.markdown("""
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200');
+        
+        html, body, [class*="css"] { font-family: 'Inter', sans-serif; color: #44403c; }
+        .stApp { background-color: #fafaf9; }
+        
+        /* Icons */
+        .material-symbols-rounded { font-size: 1.1rem; vertical-align: middle; color: #78716c; }
+        
+        /* Headers */
+        h1, h2, h3 { font-weight: 800 !important; letter-spacing: -0.025em; color: #292524; }
+        
+        /* Cards */
+        .stCard, [data-testid="stForm"] { 
+            background-color: #ffffff; 
+            padding: 1.5rem; 
+            border-radius: 1rem; 
+            box-shadow: 0 4px 6px -1px rgba(68, 64, 60, 0.05); 
+            border: 1px solid #f5f5f4; 
         }
-        [data-testid="stMetricValue"] {
-            font-size: 1.4rem;
+        
+        /* Metric Boxes (The requested "Little Box") */
+        [data-testid="stMetric"] {
+            background-color: #ffffff;
+            padding: 15px;
+            border-radius: 12px;
+            box-shadow: 0 1px 3px 0 rgba(0,0,0,0.05);
+            border: 1px solid #e7e5e4;
+            text-align: center;
         }
-        [data-testid="stMetricLabel"] {
-            font-size: 0.7rem;
-        }
+        [data-testid="stMetricValue"] { font-size: 1.6rem; font-weight: 800; color: #44403c; }
+        [data-testid="stMetricLabel"] { font-size: 0.75rem; font-weight: 600; color: #a8a29e; letter-spacing: 0.05em; text-transform: uppercase; }
+        
+        /* History Lists */
         [data-testid="stVerticalBlock"] > [style*="flex-direction: column;"] > [data-testid="stVerticalBlock"] > [data-testid="stContainer"] {
-            padding: 0.75rem;
+            background-color: #ffffff; padding: 1.25rem; border-radius: 0.75rem; border: 1px solid #e7e5e4; margin-bottom: 1.0rem; box-shadow: 0 1px 2px 0 rgba(68, 64, 60, 0.05);
         }
-    }
-    
-    /* Status Badges */
-    .status-badge {
-        padding: 4px 12px;
-        border-radius: 20px;
-        font-weight: 700;
-        font-size: 0.8rem;
-        display: inline-block;
-    }
-    .status-red { background-color: #fee2e2; color: #991b1b; }
-    .status-orange { background-color: #ffedd5; color: #9a3412; }
-    .status-green { background-color: #dcfce7; color: #166534; }
-    .status-gray { background-color: #f1f5f9; color: #475569; }
-    
-    /* Daily Target Card */
-    .daily-target {
-        background-color: #ffffff;
-        border-radius: 12px;
-        padding: 1.5rem;
-        border: 1px solid #e2e8f0;
-        margin-top: 1rem;
-    }
-    .target-header {
-        font-size: 1.1rem;
-        font-weight: 800;
-        margin-bottom: 0.5rem;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-    }
-    .target-load {
-        font-size: 1.2rem;
-        font-weight: 700;
-        color: #0f172a;
-        margin: 0.5rem 0;
-    }
-    
-    /* Load Focus Bars */
-    .load-bar-container {
-        position: relative;
-        height: 24px;
-        background-color: #f1f5f9;
-        border-radius: 12px;
-        margin-bottom: 8px;
-        margin-top: 4px;
-    }
-    .load-bar-fill {
-        height: 100%;
-        border-radius: 12px;
-        position: absolute;
-        left: 0;
-        top: 0;
-    }
-    .load-bar-target {
-        position: absolute;
-        height: 100%;
-        border: 2px solid #1e293b;
-        border-radius: 12px;
-        top: 0;
-        pointer-events: none;
-        box-sizing: border-box;
-    }
-    .load-label {
-        font-size: 0.75rem;
-        font-weight: 600;
-        color: #475569;
-        margin-bottom: 2px;
-        display: flex;
-        justify-content: space-between;
-    }
-</style>
-""", unsafe_allow_html=True)
+        .history-label { font-size: 0.7rem; text-transform: uppercase; color: #a8a29e; font-weight: 600; margin-bottom: 0px; }
+        .history-value { font-size: 1rem; font-weight: 600; color: #57534e; }
+        .history-sub { font-size: 0.85rem; color: #78716c; }
+        
+        /* Inputs & Buttons */
+        .stTextInput input, .stNumberInput input, .stSelectbox select, .stDateInput input, .stTextArea textarea { 
+            border-radius: 8px; border: 1px solid #e7e5e4; padding: 0.75rem; background-color: #fff; color: #44403c; 
+        }
+        .stButton button { border-radius: 8px; font-weight: 500; padding: 0.4rem 0.8rem; border: 1px solid #e7e5e4; background-color: #ffffff; color: #57534e; }
+        .stButton button:hover { border-color: #c2410c; color: #c2410c; background-color: #fff7ed; }
+        [data-testid="stFormSubmitButton"] button { background-color: #c2410c; color: white; padding: 0.6rem 1.2rem; width: 100%; border: none; }
+        [data-testid="stFormSubmitButton"] button:hover { background-color: #9a3412; }
+        .streamlit-expanderHeader { font-weight: 600; color: #44403c; border-radius: 8px; background-color: #ffffff; }
+        [data-testid="stRadio"] > div { flex-direction: row; gap: 10px; flex-wrap: wrap; }
+        @media only screen and (max-width: 600px) { .stCard, [data-testid="stForm"] { padding: 1rem; } [data-testid="stMetricValue"] { font-size: 1.4rem; } [data-testid="stVerticalBlock"] > [style*="flex-direction: column;"] > [data-testid="stVerticalBlock"] > [data-testid="stContainer"] { padding: 0.75rem; } }
+        
+        /* Custom Components */
+        .status-badge { padding: 4px 12px; border-radius: 20px; font-weight: 700; font-size: 0.8rem; display: inline-block; }
+        .status-red { background-color: #fecaca; color: #991b1b; }
+        .status-orange { background-color: #ffedd5; color: #c2410c; }
+        .status-green { background-color: #dcfce7; color: #166534; }
+        .status-gray { background-color: #f5f5f4; color: #78716c; }
+        
+        .daily-target { background-color: #ffffff; border-radius: 12px; padding: 1.5rem; border: 1px solid #e7e5e4; margin-top: 1rem; }
+        .target-header { font-size: 1.1rem; font-weight: 800; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 8px; }
+        .target-load { font-size: 1.2rem; font-weight: 700; color: #c2410c; margin: 0.5rem 0; }
+        
+        .load-bar-container { position: relative; height: 24px; background-color: #f5f5f4; border-radius: 12px; margin-bottom: 8px; margin-top: 4px; }
+        .load-bar-fill { height: 100%; border-radius: 12px; position: absolute; left: 0; top: 0; }
+        .load-bar-target { position: absolute; height: 100%; border: 2px solid #44403c; border-radius: 12px; top: 0; pointer-events: none; box-sizing: border-box; }
+        .load-label { font-size: 0.75rem; font-weight: 600; color: #78716c; margin-bottom: 2px; display: flex; justify-content: space-between; }
+    </style>
+    """, unsafe_allow_html=True)
 
-# --- Data Persistence Helper (FIRESTORE) ---
+# --- Data Persistence Helper ---
 DATA_FILE = "run_tracker_data.json"
 
 DEFAULT_DATA = {
@@ -286,7 +135,6 @@ DEFAULT_DATA = {
 
 def load_data():
     data = copy.deepcopy(DEFAULT_DATA)
-    # If no DB, try local
     if not db:
         if os.path.exists(DATA_FILE):
             try:
@@ -318,21 +166,16 @@ def load_data():
             h['id'] = doc.id
             data["health_logs"].append(h)
         
-        # 4. Settings (Profile, Routines, Plan)
+        # 4. Settings
         settings_ref = db.collection("settings")
-        
-        # Profile
         prof_doc = settings_ref.document("profile").get()
-        if prof_doc.exists:
-            data['user_profile'].update(prof_doc.to_dict())
+        if prof_doc.exists: data['user_profile'].update(prof_doc.to_dict())
             
-        # Routines
         routines_doc = settings_ref.document("routines").get()
         if routines_doc.exists:
             saved_routines = routines_doc.to_dict().get('list', [])
             if saved_routines: data['routines'] = saved_routines
             
-        # Plan
         plan_doc = settings_ref.document("plan").get()
         if plan_doc.exists:
             plan_data = plan_doc.to_dict()
@@ -354,25 +197,22 @@ def save_data(data):
         json.dump(data, f, indent=4)
 
 def persist():
-    # If offline, save to file
     if not db:
         save_data(st.session_state.data)
 
 def get_last_lift_stats(ex_name):
     sessions = st.session_state.data.get('gym_sessions', [])
-    if not sessions:
-        return None
+    if not sessions: return None
     for s in sessions:
         for ex in s['exercises']:
             if ex['name'].lower() == ex_name.lower():
-                sets_str = ", ".join([f"{s['reps']}x{s['weight']}kg" for s in ex['sets']])
-                return sets_str
+                return ", ".join([f"{s['reps']}x{s['weight']}kg" for s in ex['sets']])
     return None
 
 # --- Helper Functions ---
 def get_malaysia_time():
-    """Returns current time in Malaysia (UTC+8)"""
-    return datetime.utcnow() + timedelta(hours=8)
+    """Returns current time in Malaysia (UTC+8) using timezone-aware object"""
+    return datetime.now(timezone.utc) + timedelta(hours=8)
 
 def format_pace(decimal_min):
     if not decimal_min or decimal_min == 0: return "-"
@@ -381,14 +221,12 @@ def format_pace(decimal_min):
     return f"{mins}'{secs:02d}\""
 
 def format_duration(decimal_min):
-    if not decimal_min:
-        return "00:00:00"
+    if not decimal_min: return "00:00:00"
     mins = int(decimal_min)
     secs = int((decimal_min - mins) * 60)
     hrs = mins // 60
     rem_mins = mins % 60
-    if hrs > 0:
-        return f"{hrs:02d}:{rem_mins:02d}:{secs:02d}"
+    if hrs > 0: return f"{hrs:02d}:{rem_mins:02d}:{secs:02d}"
     return f"{rem_mins:02d}:{secs:02d}"
 
 def format_sleep(decimal_hours):
@@ -432,7 +270,6 @@ class PhysiologyEngine:
         z4_upper = float(self.zones.get('z4_u', 175))
         time_z5 = zones[4] if len(zones) > 4 else 0
         time_z4 = zones[3] if len(zones) > 3 else 0
-        
         if time_z5 > 5 or (avg_hr > z4_upper): return "anaerobic"
         if time_z4 > 10: return "high"
         return "low"
@@ -466,7 +303,6 @@ class PhysiologyEngine:
             exponent = 1.92 if self.gender == 'male' else 1.67
             load = duration_min * hr_reserve * 0.64 * math.exp(exponent * hr_reserve)
             
-            # Fallback classification
             z2_upper = float(self.zones.get('z2_u', 145))
             z4_upper = float(self.zones.get('z4_u', 175))
             if avg_hr > z4_upper: focus_scores['anaerobic'] = load
@@ -488,7 +324,6 @@ class PhysiologyEngine:
         scaling = self.vo2_max * 1.5
         if scaling == 0: return 0.0, "None"
         te = round(min(5.0, trimp_score / scaling), 1)
-        
         label = "Recovery"
         if te >= 1.0 and te < 2.0: label = "Maintaining"
         elif te >= 2.0 and te < 3.0: label = "Productive"
@@ -556,6 +391,7 @@ class PhysiologyEngine:
             "feedback": feedback, "total_4w": total_chronic
         }
 
+# --- Report Generation ---
 def generate_report(start_date, end_date, selected_cats):
     report = [f"Training & Physio Report"]
     report.append(f"{start_date.strftime('%b %d')} - {end_date.strftime('%b %d')}\n")
@@ -614,17 +450,15 @@ def generate_report(start_date, end_date, selected_cats):
                 report.append(f"- {date_str}: Sleep: {sleep_str} | Readiness: {daily_target['readiness']}")
     return "\n".join(report)
 
+# --- Sidebar Navigation ---
 def render_sidebar():
     with st.sidebar:
         st.title(":material/sprint: RunLog Hub")
         malaysia_time = get_malaysia_time()
         st.caption(f"🇲🇾 {malaysia_time.strftime('%d %b %Y, %H:%M')}")
         
-        # Connection Indicator
-        if db:
-             st.caption("🟢 Connected to Firestore")
-        else:
-             st.caption("🟠 Local Storage (Offline)")
+        if db: st.caption("🟢 Connected to Firestore")
+        else: st.caption("🟠 Local Storage (Offline)")
              
         selected_tab = st.radio("Navigate", ["Training Status", "Cardio Training", "Gym", "Plan", "Trends", "Share"], label_visibility="collapsed")
         st.divider()
@@ -667,6 +501,8 @@ def render_sidebar():
                 else: save_data(st.session_state.data)
                 st.success("Saved!")
         return selected_tab
+
+# --- TAB RENDERERS ---
 
 def render_training_status():
     st.header(":material/monitor_heart: Training Status")
