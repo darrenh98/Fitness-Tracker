@@ -2,5 +2,4 @@ streamlit>=1.30.0
 pandas>=2.0.0
 plotly>=5.18.0
 statsmodels>=0.14.0
-python-docx>=1.1.0
-firebase-admin
+firebase-admin>=6.2.0
