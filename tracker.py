@@ -11,11 +11,26 @@ import re
 import math
 import streamlit.components.v1 as components
 
-# Try to import docx, handle if not installed immediately
+# --- Firebase Init ---
+import firebase_admin
+from firebase_admin import credentials, firestore
+
+# Initialize Firebase (Server-side)
+if not firebase_admin._apps:
+    # Try/Except to handle cases where secrets might not be set yet
+    try:
+        key_dict = dict(st.secrets["firebase"])
+        cred = credentials.Certificate(key_dict)
+        firebase_admin.initialize_app(cred)
+    except Exception as e:
+        # Just pass, we will handle db=None later
+        pass
+
+# Get DB client
 try:
-    from docx import Document
-except ImportError:
-    Document = None
+    db = firestore.client()
+except:
+    db = None # Handle offline/config error mode gracefully
 
 # --- Configuration & Styling ---
 st.set_page_config(
@@ -248,7 +263,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- Data Persistence Helper ---
+# --- Data Persistence Helper (FIRESTORE) ---
 DATA_FILE = "run_tracker_data.json"
 
 DEFAULT_DATA = {
@@ -256,60 +271,92 @@ DEFAULT_DATA = {
     "health_logs": [],
     "gym_sessions": [],
     "routines": [
-        {"id": 1, "name": "Leg Day", "exercises": ["Squats", "Split Squats", "Glute Bridges", "Calf Raises"]},
-        {"id": 2, "name": "Upper Body", "exercises": ["Bench Press", "Pull Ups", "Overhead Press", "Rows"]}
+        {"id": "leg_day", "name": "Leg Day", "exercises": ["Squats", "Split Squats", "Glute Bridges", "Calf Raises"]},
+        {"id": "upper_body", "name": "Upper Body", "exercises": ["Bench Press", "Pull Ups", "Overhead Press", "Rows"]}
     ],
-    # Enhanced User Profile Defaults
     "user_profile": {
         "age": 30, "height": 175, "weight": 70, "heightUnit": "cm", "weightUnit": "kg",
         "gender": "Male", "hrMax": 190, "hrRest": 60, "vo2Max": 45,
         "monthAvgRHR": 60, "monthAvgHRV": 40,
-        # Default Zones
-        "zones": {
-            "z1_u": 130, 
-            "z2_l": 131, "z2_u": 145,
-            "z3_l": 146, "z3_u": 160,
-            "z4_l": 161, "z4_u": 175,
-            "z5_l": 176
-        }
+        "zones": {"z1_u": 130, "z2_l": 131, "z2_u": 145, "z3_l": 146, "z3_u": 160, "z4_l": 161, "z4_u": 175, "z5_l": 176}
     },
     "cycles": {"macro": "", "meso": "", "micro": ""},
     "weekly_plan": {day: {"am": "", "pm": ""} for day in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']}
 }
 
 def load_data():
-    if not os.path.exists(DATA_FILE):
-        return DEFAULT_DATA
+    data = copy.deepcopy(DEFAULT_DATA)
+    # If no DB, try local
+    if not db:
+        if os.path.exists(DATA_FILE):
+            try:
+                with open(DATA_FILE, 'r') as f:
+                    local = json.load(f)
+                    data.update(local)
+            except: pass
+        return data
+
     try:
-        with open(DATA_FILE, 'r') as f:
-            data = json.load(f)
-            # Migration: Ensure new profile fields exist
-            if 'gender' not in data.get('user_profile', {}):
-                data['user_profile'].update({"gender": "Male", "hrMax": 190, "hrRest": 60, "vo2Max": 45})
-            if 'monthAvgRHR' not in data.get('user_profile', {}):
-                data['user_profile'].update({"monthAvgRHR": 60, "monthAvgHRV": 40})
-            # Migration for zones
-            if 'zones' not in data.get('user_profile', {}) or 'z1_u' not in data.get('user_profile', {}).get('zones', {}):
-                data['user_profile']['zones'] = {
-                    "z1_u": 130, 
-                    "z2_l": 131, "z2_u": 145,
-                    "z3_l": 146, "z3_u": 160,
-                    "z4_l": 161, "z4_u": 175,
-                    "z5_l": 176
-                }
-            return data
-    except:
-        return DEFAULT_DATA
+        # 1. Runs
+        runs_ref = db.collection("runs").stream()
+        for doc in runs_ref:
+            r = doc.to_dict()
+            r['id'] = doc.id
+            data["runs"].append(r)
+        
+        # 2. Gym
+        gym_ref = db.collection("gym_sessions").stream()
+        for doc in gym_ref:
+            g = doc.to_dict()
+            g['id'] = doc.id
+            data["gym_sessions"].append(g)
+            
+        # 3. Health
+        health_ref = db.collection("health_logs").stream()
+        for doc in health_ref:
+            h = doc.to_dict()
+            h['id'] = doc.id
+            data["health_logs"].append(h)
+        
+        # 4. Settings (Profile, Routines, Plan)
+        settings_ref = db.collection("settings")
+        
+        # Profile
+        prof_doc = settings_ref.document("profile").get()
+        if prof_doc.exists:
+            data['user_profile'].update(prof_doc.to_dict())
+            
+        # Routines
+        routines_doc = settings_ref.document("routines").get()
+        if routines_doc.exists:
+            saved_routines = routines_doc.to_dict().get('list', [])
+            if saved_routines: data['routines'] = saved_routines
+            
+        # Plan
+        plan_doc = settings_ref.document("plan").get()
+        if plan_doc.exists:
+            plan_data = plan_doc.to_dict()
+            if 'cycles' in plan_data: data['cycles'] = plan_data['cycles']
+            if 'weekly_plan' in plan_data: data['weekly_plan'] = plan_data['weekly_plan']
+
+        # Sort
+        data["runs"].sort(key=lambda x: x.get('date', ''), reverse=True)
+        data["gym_sessions"].sort(key=lambda x: x.get('date', ''), reverse=True)
+        data["health_logs"].sort(key=lambda x: x.get('date', ''), reverse=True)
+        
+    except Exception as e:
+        st.error(f"Error loading data: {e}")
+    
+    return data
 
 def save_data(data):
     with open(DATA_FILE, 'w') as f:
         json.dump(data, f, indent=4)
 
-if 'data' not in st.session_state:
-    st.session_state.data = load_data()
-
 def persist():
-    save_data(st.session_state.data)
+    # If offline, save to file
+    if not db:
+        save_data(st.session_state.data)
 
 def get_last_lift_stats(ex_name):
     sessions = st.session_state.data.get('gym_sessions', [])
@@ -325,29 +372,24 @@ def get_last_lift_stats(ex_name):
 # --- Helper Functions ---
 def get_malaysia_time():
     """Returns current time in Malaysia (UTC+8)"""
-    # Simple offset without external pytz dependency for robustness
     return datetime.utcnow() + timedelta(hours=8)
 
 def format_pace(decimal_min):
-    if not decimal_min or decimal_min == 0:
-        return "-"
+    if not decimal_min or decimal_min == 0: return "-"
     mins = int(decimal_min)
     secs = int((decimal_min - mins) * 60)
     return f"{mins}'{secs:02d}\""
 
 def format_duration(decimal_min):
-    if not decimal_min:
-        return "00:00:00"
+    if not decimal_min: return "00:00:00"
     mins = int(decimal_min)
     secs = int((decimal_min - mins) * 60)
     hrs = mins // 60
     rem_mins = mins % 60
-    if hrs > 0:
-        return f"{hrs:02d}:{rem_mins:02d}:{secs:02d}"
+    if hrs > 0: return f"{hrs:02d}:{rem_mins:02d}:{secs:02d}"
     return f"{rem_mins:02d}:{secs:02d}"
 
 def format_sleep(decimal_hours):
-    """Converts decimal hours (e.g. 6.83) to '6h 50m' string"""
     if not decimal_hours: return "-"
     hrs = int(decimal_hours)
     mins = int((decimal_hours - hrs) * 60)
@@ -366,80 +408,43 @@ def parse_time_input(time_str):
         return 0.0
 
 def float_to_hhmm(val):
-    """Converts decimal hours 7.5 to string '07:30' for prefilling text inputs"""
     if not val: return ""
     hours = int(val)
     minutes = int((val - hours) * 60)
     return f"{hours:02d}:{minutes:02d}"
 
 def scroll_to_top():
-    """Injects JS to scroll to top of page"""
-    js = """
-    <script>
-        var body = window.parent.document.querySelector(".main");
-        if (body) { body.scrollTop = 0; }
-    </script>
-    """
+    js = """<script>var body = window.parent.document.querySelector(".main"); if (body) { body.scrollTop = 0; }</script>"""
     components.html(js, height=0)
 
 # --- Physiology Engine ---
 class PhysiologyEngine:
     def __init__(self, user_profile):
-        """
-        Initialize with user object containing:
-        hr_max, hr_rest, vo2_max, gender ('male'/'female')
-        zones: dict with boundary keys
-        """
         self.hr_max = float(user_profile.get('hrMax', 190))
-        # hrRest here comes from the monthAvgRHR in the profile updates
-        self.hr_rest = float(user_profile.get('hrRest', 60)) 
+        self.hr_rest = float(user_profile.get('hrRest', 60))
         self.vo2_max = float(user_profile.get('vo2Max', 45))
         self.gender = user_profile.get('gender', 'Male').lower()
         self.zones = user_profile.get('zones', {})
 
     def classify_activity_load(self, load, avg_hr, zones):
-        """
-        Classifies a session's load into Anaerobic, High Aerobic, or Low Aerobic.
-        Rules:
-        - Anaerobic: Time in Z5 > 5 mins OR Avg HR > Z4 threshold
-        - High Aerobic: Time in Z4 > 10 mins AND Not Anaerobic
-        - Low Aerobic: Everything else
-        """
-        # Get thresholds
         z4_upper = float(self.zones.get('z4_u', 175))
-        z4_lower = float(self.zones.get('z4_l', 161))
-        
-        # Zones list is [z1, z2, z3, z4, z5] in minutes
         time_z5 = zones[4] if len(zones) > 4 else 0
         time_z4 = zones[3] if len(zones) > 3 else 0
         
-        # Anaerobic Check
-        if time_z5 > 5 or (avg_hr > z4_upper):
-            return "anaerobic"
-        
-        # High Aerobic Check
-        if time_z4 > 10:
-            return "high"
-            
-        # Default to Low Aerobic
+        if time_z5 > 5 or (avg_hr > z4_upper): return "anaerobic"
+        if time_z4 > 10: return "high"
         return "low"
 
     def calculate_trimp(self, duration_min, avg_hr=None, zones=None):
-        """
-        Calculates Training Impulse (TRIMP) using Banister's formula.
-        Splits load into buckets based on zone intensity (SPLIT METHOD).
-        """
         load = 0.0
         focus_scores = {'low': 0, 'high': 0, 'anaerobic': 0}
 
         if zones and len(self.zones) > 0:
-            # Granular Calculation per Zone using explicit Midpoints
             z1_mid = (self.hr_rest + float(self.zones.get('z1_u', 130))) / 2
             z2_mid = (float(self.zones.get('z2_l', 131)) + float(self.zones.get('z2_u', 145))) / 2
             z3_mid = (float(self.zones.get('z3_l', 146)) + float(self.zones.get('z3_u', 160))) / 2
             z4_mid = (float(self.zones.get('z4_l', 161)) + float(self.zones.get('z4_u', 175))) / 2
             z5_mid = (float(self.zones.get('z5_l', 176)) + self.hr_max) / 2
-            
             midpoints = [z1_mid, z2_mid, z3_mid, z4_mid, z5_mid]
             exponent = 1.92 if self.gender == 'male' else 1.67
             
@@ -448,27 +453,19 @@ class PhysiologyEngine:
                 avg_zone_hr = midpoints[i]
                 hr_reserve = max(0.0, min(1.0, (avg_zone_hr - self.hr_rest) / (self.hr_max - self.hr_rest)))
                 segment_load = duration * hr_reserve * 0.64 * math.exp(exponent * hr_reserve)
-                
                 load += segment_load
                 
-                # Classify Focus - Split logic
-                if i <= 1: # Z1, Z2
-                    focus_scores['low'] += segment_load
-                elif i <= 3: # Z3, Z4
-                    focus_scores['high'] += segment_load
-                else: # Z5
-                    focus_scores['anaerobic'] += segment_load
+                if i <= 1: focus_scores['low'] += segment_load
+                elif i <= 3: focus_scores['high'] += segment_load
+                else: focus_scores['anaerobic'] += segment_load
                 
         elif avg_hr and avg_hr > 0:
-            # Basic Banister (Fallback)
             hr_reserve = max(0.0, min(1.0, (avg_hr - self.hr_rest) / (self.hr_max - self.hr_rest)))
             exponent = 1.92 if self.gender == 'male' else 1.67
             load = duration_min * hr_reserve * 0.64 * math.exp(exponent * hr_reserve)
             
-            # Estimate focus based on Avg HR against Zone 2/4 boundaries
             z2_upper = float(self.zones.get('z2_u', 145))
             z4_upper = float(self.zones.get('z4_u', 175))
-            
             if avg_hr > z4_upper: focus_scores['anaerobic'] = load
             elif avg_hr > z2_upper: focus_scores['high'] = load
             else: focus_scores['low'] = load
@@ -476,94 +473,44 @@ class PhysiologyEngine:
         return load, focus_scores
 
     def get_daily_target(self, current_rhr):
-        """
-        Determines daily training target based on Morning RHR vs Baseline (hr_rest).
-        """
         diff = current_rhr - self.hr_rest
-        
         if diff < -2:
-            # RHR is lower than baseline -> High Readiness
-            return {
-                "readiness": "High",
-                "recommendation": "Go Hard / Interval Day",
-                "target_load": "Heavy (e.g., Threshold)",
-                "message": "Green light. System primed.",
-                "color": "#65a30d", 
-                "bg": "#dcfce7" # Light Green
-            }
+            return {"readiness": "High", "recommendation": "Go Hard / Interval Day", "target_load": "Heavy (e.g., Threshold)", "message": "Green light. System primed.", "color": "#65a30d", "bg": "#dcfce7"}
         elif diff > 5:
-            # RHR is significantly higher -> Low Readiness
-            return {
-                "readiness": "Low",
-                "recommendation": "Active Recovery / Rest",
-                "target_load": "Recovery (e.g., 30m easy)",
-                "message": "Red light. Focus on sleep.",
-                "color": "#be123c", 
-                "bg": "#fee2e2" # Light Red
-            }
+            return {"readiness": "Low", "recommendation": "Active Recovery", "target_load": "Recovery (e.g., 30m easy)", "message": "Red light. Focus on sleep.", "color": "#be123c", "bg": "#fee2e2"}
         else:
-            # Moderate Readiness
-            return {
-                "readiness": "Moderate",
-                "recommendation": "Steady State / Base",
-                "target_load": "Maintenance (e.g., Z2)",
-                "message": "Train, but keep controlled.",
-                "color": "#ea580c", 
-                "bg": "#ffedd5" # Light Orange
-            }
+            return {"readiness": "Moderate", "recommendation": "Steady State", "target_load": "Maintenance (e.g., Z2)", "message": "Train, but keep controlled.", "color": "#ea580c", "bg": "#ffedd5"}
 
     def get_training_effect(self, trimp_score):
-        """
-        Scales raw TRIMP to a 0.0-5.0 Training Effect score based on VO2 Max.
-        """
-        scaling_factor = self.vo2_max * 1.5
-        if scaling_factor == 0: return 0.0, "None"
-        
-        te = trimp_score / scaling_factor
-        te = round(min(5.0, te), 1)
-        
+        scaling = self.vo2_max * 1.5
+        if scaling == 0: return 0.0, "None"
+        te = round(min(5.0, trimp_score / scaling), 1)
         label = "Recovery"
         if te >= 1.0 and te < 2.0: label = "Maintaining"
         elif te >= 2.0 and te < 3.0: label = "Productive"
         elif te >= 3.0 and te < 4.0: label = "Improving"
         elif te >= 4.0 and te < 5.0: label = "Highly Improving"
         elif te >= 5.0: label = "Overreaching"
-            
         return te, label
 
-    def get_trimp_label(self, trimp):
-        if trimp < 50: return "Light"
-        if trimp < 100: return "Moderate"
-        if trimp < 200: return "Hard"
-        return "Extreme"
-
     def calculate_training_status(self, activity_history):
-        """
-        Calculates Acute:Chronic Workload Ratio (ACWR) and Status.
-        activity_history: list of dicts with {'date': 'YYYY-MM-DD', 'load': float, 'focus_type': str}
-        """
         today = get_malaysia_time().date()
-        
-        acute_start = today - timedelta(days=6) # Last 7 days
-        chronic_start = today - timedelta(days=27) # Last 28 days
+        acute_start = today - timedelta(days=6)
+        chronic_start = today - timedelta(days=27)
         
         acute_load = 0
         chronic_load_total = 0
-        
-        # Bucket Accumulation (Chronic 4-week window)
         buckets = {'low': 0, 'high': 0, 'anaerobic': 0}
         
         for activity in activity_history:
             act_date = datetime.strptime(activity['date'], '%Y-%m-%d').date()
             load = activity.get('load', 0)
-            focus = activity.get('focus', {}) 
+            focus = activity.get('focus', {})
             
             if acute_start <= act_date <= today:
                 acute_load += load
-                
             if chronic_start <= act_date <= today:
                 chronic_load_total += load
-                # Accumulate buckets based on the focus dict
                 buckets['low'] += focus.get('low', 0)
                 buckets['high'] += focus.get('high', 0)
                 buckets['anaerobic'] += focus.get('anaerobic', 0)
@@ -571,70 +518,45 @@ class PhysiologyEngine:
         chronic_load_weekly = chronic_load_total / 4.0 if chronic_load_total > 0 else 1.0
         ratio = acute_load / chronic_load_weekly
         
-        # Status Logic
         status = "Recovery"
         color_class = "status-gray"
         description = "Load is very low."
 
         if ratio > 1.5:
-            status = "Overreaching"
-            color_class = "status-red"
-            description = "High injury risk! Spike in load."
+            status = "Overreaching"; color_class = "status-red"; description = "High injury risk! Spike in load."
         elif 1.3 <= ratio <= 1.5:
-            status = "High Strain"
-            color_class = "status-orange"
-            description = "Caution: Rapid load increase."
+            status = "High Strain"; color_class = "status-orange"; description = "Caution: Rapid load increase."
         elif 0.8 <= ratio < 1.3:
-            if acute_load > chronic_load_weekly:
-                status = "Productive"
-                color_class = "status-green"
-                description = "Optimal zone. Building fitness."
-            else:
-                status = "Maintaining"
-                color_class = "status-green"
-                description = "Load is consistent."
+            if acute_load > chronic_load_weekly: status = "Productive"; color_class = "status-green"; description = "Building fitness."
+            else: status = "Maintaining"; color_class = "status-green"; description = "Load is consistent."
         else:
-            status = "Recovery / Detraining"
-            color_class = "status-gray"
-            description = "Workload is decreasing."
+            status = "Recovery"; color_class = "status-gray"; description = "Workload is decreasing."
             
-        # Optimal Target Ranges (80/20 model approx)
         total_chronic = chronic_load_total
         targets = {
             'low': {'min': total_chronic * 0.70, 'max': total_chronic * 0.90},
-            'high': {'min': total_chronic * 0.10, 'max': total_chronic * 0.25}, # widened slightly for flexibility
+            'high': {'min': total_chronic * 0.10, 'max': total_chronic * 0.25},
             'anaerobic': {'min': total_chronic * 0.0, 'max': total_chronic * 0.10}
         }
         
-        # Determine Shortages
         feedback = "Balanced! Well done."
-        if buckets['low'] < targets['low']['min']:
-            feedback = "Shortage: Low Aerobic. You need more easy base miles."
-        elif buckets['high'] < targets['high']['min']:
-             feedback = "Shortage: High Aerobic. Try a Tempo or Threshold run."
-        elif buckets['anaerobic'] < targets['anaerobic']['min'] and total_chronic > 500: # Only suggest anaerobic if base exists
-             feedback = "Shortage: Anaerobic. Try some sprints or hill repeats."
-        elif buckets['low'] > targets['low']['max']:
-             feedback = "Focus: High Volume of Easy work detected."
+        if buckets['low'] < targets['low']['min']: feedback = "Shortage: Low Aerobic."
+        elif buckets['high'] < targets['high']['min']: feedback = "Shortage: High Aerobic."
+        elif buckets['anaerobic'] < targets['anaerobic']['min'] and total_chronic > 500: feedback = "Shortage: Anaerobic."
+        elif buckets['low'] > targets['low']['max']: feedback = "Focus: High Volume of Easy work."
 
         return {
-            "acute": round(acute_load),
-            "chronic": round(chronic_load_weekly),
-            "ratio": round(ratio, 2),
-            "status": status,
-            "css": color_class,
-            "desc": description,
-            "buckets": buckets,
-            "targets": targets,
-            "feedback": feedback,
-            "total_4w": total_chronic
+            "acute": round(acute_load), "chronic": round(chronic_load_weekly),
+            "ratio": round(ratio, 2), "status": status, "css": color_class,
+            "desc": description, "buckets": buckets, "targets": targets,
+            "feedback": feedback, "total_4w": total_chronic
         }
 
+# --- Report Generation Function ---
 def generate_report(start_date, end_date, selected_cats):
     report = [f"Training & Physio Report"]
     report.append(f"{start_date.strftime('%b %d')} - {end_date.strftime('%b %d')}\n")
     
-    # Calculate Physio Stats for context
     engine = PhysiologyEngine(st.session_state.data['user_profile'])
     
     # 1. FIELD ACTIVITIES & LOAD
@@ -642,13 +564,11 @@ def generate_report(start_date, end_date, selected_cats):
     
     if field_types:
         runs = st.session_state.data['runs']
-        # Filter by date and type
         period_runs = [
             r for r in runs 
             if start_date <= datetime.strptime(r['date'], '%Y-%m-%d').date() <= end_date
             and r['type'] in field_types
         ]
-        # Sort by date
         period_runs.sort(key=lambda x: x['date'])
         
         if period_runs:
@@ -660,7 +580,6 @@ def generate_report(start_date, end_date, selected_cats):
             report.append("")
             
             for r in period_runs:
-                # Calculate Physio metrics on fly for report
                 zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
                 trimp, focus = engine.calculate_trimp(float(r['duration']), int(r['avgHr']), zones)
                 # Find dominant focus type
@@ -669,7 +588,6 @@ def generate_report(start_date, end_date, selected_cats):
                 
                 line = f"- {r['date'][5:]}: {r['type']} {r['distance']}km @ {format_duration(r['duration'])}"
                 
-                # Metrics Line
                 metrics = []
                 if r['distance'] > 0 and r['type'] != 'Ultimate': metrics.append(f"{format_pace(r['duration']/r['distance'])}/km")
                 if r['avgHr'] > 0: metrics.append(f"{r['avgHr']}bpm")
@@ -678,13 +596,11 @@ def generate_report(start_date, end_date, selected_cats):
                 
                 report.append(line)
                 
-                # Physio & Feel
                 physio_info = f"   Load: {int(trimp)} ({focus_type.title()}) | TE: {te} {te_label}"
                 if r.get('rpe'): physio_info += f" | RPE: {r['rpe']}"
                 if r.get('feel'): physio_info += f" | Feel: {r['feel']}"
                 report.append(physio_info)
                 
-                # Notes
                 if r.get('notes'): report.append(f"   Note: {r['notes']}")
             report.append("")
     
@@ -717,7 +633,6 @@ def generate_report(start_date, end_date, selected_cats):
                 sleep_dec = s.get('sleepHours', 0)
                 sleep_str = format_sleep(sleep_dec)
                 
-                # Determine readiness for this day based on CURRENT profile baseline
                 daily_target = engine.get_daily_target(rhr)
                 readiness = daily_target['readiness']
                 
@@ -725,7 +640,6 @@ def generate_report(start_date, end_date, selected_cats):
             report.append("")
 
     # 4. TRAINING STATUS SNAPSHOT (Based on End Date)
-    # Need full history for calculation
     all_runs = st.session_state.data['runs']
     history_data = []
     for r in all_runs:
@@ -733,7 +647,6 @@ def generate_report(start_date, end_date, selected_cats):
         trimp, focus = engine.calculate_trimp(float(r['duration']), int(r['avgHr']), zones)
         history_data.append({'date': r['date'], 'load': trimp, 'focus': focus})
     
-    # Calculate status
     status = engine.calculate_training_status(history_data)
     
     report.append(f"CURRENT STATUS")
@@ -745,20 +658,64 @@ def generate_report(start_date, end_date, selected_cats):
 
     return "\n".join(report)
 
-def parse_imported_word_data(docx_file):
-    # Import logic removed/not needed per request but kept stub for safety if called
-    return 0, "Feature disabled"
+# --- UI Render Functions ---
+def setup_page():
+    st.markdown("""
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200');
+        html, body, [class*="css"] { font-family: 'Inter', sans-serif; color: #44403c; }
+        .stApp { background-color: #fafaf9; }
+        .material-symbols-rounded { font-size: 1.1rem; vertical-align: middle; color: #78716c; }
+        h1, h2, h3 { font-weight: 800 !important; letter-spacing: -0.025em; color: #292524; }
+        .stCard, [data-testid="stForm"] { background-color: #ffffff; padding: 1.5rem; border-radius: 1rem; box-shadow: 0 4px 6px -1px rgba(68, 64, 60, 0.05); border: 1px solid #f5f5f4; }
+        [data-testid="stVerticalBlock"] > [style*="flex-direction: column;"] > [data-testid="stVerticalBlock"] > [data-testid="stContainer"] {
+            background-color: #ffffff; padding: 1.25rem; border-radius: 0.75rem; border: 1px solid #e7e5e4; margin-bottom: 1.0rem; box-shadow: 0 1px 2px 0 rgba(68, 64, 60, 0.05);
+        }
+        /* Boxing every metric for dashboard feel */
+        [data-testid="stMetric"] {
+            background-color: #ffffff;
+            padding: 15px;
+            border-radius: 12px;
+            box-shadow: 0 1px 3px 0 rgba(0,0,0,0.05);
+            border: 1px solid #e7e5e4;
+            text-align: center;
+        }
+        [data-testid="stMetricValue"] { font-size: 1.6rem; font-weight: 800; color: #44403c; }
+        [data-testid="stMetricLabel"] { font-size: 0.75rem; font-weight: 600; color: #a8a29e; letter-spacing: 0.05em; text-transform: uppercase; }
+        .history-label { font-size: 0.7rem; text-transform: uppercase; color: #a8a29e; font-weight: 600; margin-bottom: 0px; }
+        .history-value { font-size: 1rem; font-weight: 600; color: #57534e; }
+        .history-sub { font-size: 0.85rem; color: #78716c; }
+        .stTextInput input, .stNumberInput input, .stSelectbox select, .stDateInput input, .stTextArea textarea { border-radius: 8px; border: 1px solid #e7e5e4; padding: 0.75rem; background-color: #fff; color: #44403c; }
+        .stButton button { border-radius: 8px; font-weight: 500; padding: 0.4rem 0.8rem; border: 1px solid #e7e5e4; background-color: #ffffff; color: #57534e; }
+        .stButton button:hover { border-color: #c2410c; color: #c2410c; background-color: #fff7ed; }
+        [data-testid="stFormSubmitButton"] button { background-color: #c2410c; color: white; padding: 0.6rem 1.2rem; width: 100%; border: none; }
+        [data-testid="stFormSubmitButton"] button:hover { background-color: #9a3412; }
+        .streamlit-expanderHeader { font-weight: 600; color: #44403c; border-radius: 8px; background-color: #ffffff; }
+        [data-testid="stRadio"] > div { flex-direction: row; gap: 10px; flex-wrap: wrap; }
+        @media only screen and (max-width: 600px) { .stCard, [data-testid="stForm"] { padding: 1rem; } [data-testid="stMetricValue"] { font-size: 1.4rem; } [data-testid="stVerticalBlock"] > [style*="flex-direction: column;"] > [data-testid="stVerticalBlock"] > [data-testid="stContainer"] { padding: 0.75rem; } }
+        .status-badge { padding: 4px 12px; border-radius: 20px; font-weight: 700; font-size: 0.8rem; display: inline-block; }
+        .status-red { background-color: #fecaca; color: #991b1b; }
+        .status-orange { background-color: #ffedd5; color: #c2410c; }
+        .status-green { background-color: #dcfce7; color: #166534; }
+        .status-gray { background-color: #f5f5f4; color: #78716c; }
+        .daily-target { background-color: #ffffff; border-radius: 12px; padding: 1.5rem; border: 1px solid #e7e5e4; margin-top: 1rem; }
+        .target-header { font-size: 1.1rem; font-weight: 800; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 8px; }
+        .target-load { font-size: 1.2rem; font-weight: 700; color: #c2410c; margin: 0.5rem 0; }
+        .load-bar-container { position: relative; height: 24px; background-color: #f5f5f4; border-radius: 12px; margin-bottom: 8px; margin-top: 4px; }
+        .load-bar-fill { height: 100%; border-radius: 12px; position: absolute; left: 0; top: 0; }
+        .load-bar-target { position: absolute; height: 100%; border: 2px solid #44403c; border-radius: 12px; top: 0; pointer-events: none; box-sizing: border-box; }
+        .load-label { font-size: 0.75rem; font-weight: 600; color: #78716c; margin-bottom: 2px; display: flex; justify-content: space-between; }
+    </style>
+    """, unsafe_allow_html=True)
 
-# --- Sidebar Navigation ---
 def render_sidebar():
     with st.sidebar:
         st.title(":material/sprint: RunLog Hub")
         malaysia_time = get_malaysia_time()
         st.caption(f"🇲🇾 {malaysia_time.strftime('%d %b %Y, %H:%M')}")
-        
         selected_tab = st.radio("Navigate", ["Training Status", "Cardio Training", "Gym", "Plan", "Trends", "Share"], label_visibility="collapsed")
         st.divider()
-        
         with st.expander("👤 Athlete Profile"):
             prof = st.session_state.data['user_profile']
             c1, c2 = st.columns(2)
@@ -768,12 +725,10 @@ def render_sidebar():
             c3, c5 = st.columns(2)
             hr_max = c3.number_input("Max HR", value=int(prof.get('hrMax', 190)))
             vo2 = c5.number_input("VO2 Max", value=float(prof.get('vo2Max', 45)))
-            
             st.markdown("**Monthly Averages**")
             cm1, cm2 = st.columns(2)
             m_rhr = cm1.number_input("Avg RHR", value=int(prof.get('monthAvgRHR', 60)))
             m_hrv = cm2.number_input("Avg HRV", value=int(prof.get('monthAvgHRV', 40)))
-
             st.markdown("**Heart Rate Zones**")
             cz = prof.get('zones', {})
             z1_u = st.number_input("Z1 Upper", value=int(cz.get('z1_u', 130)))
@@ -787,24 +742,18 @@ def render_sidebar():
             z4_l = c_z4l.number_input("Z4 Lower", value=int(cz.get('z4_l', 161)))
             z4_u = c_z4u.number_input("Z4 Upper", value=int(cz.get('z4_u', 175)))
             z5_l = st.number_input("Z5 Lower", value=int(cz.get('z5_l', 176)))
-
             if st.button("Save Profile"):
                 st.session_state.data['user_profile'].update({
                     'weight': new_weight, 'height': new_height, 'gender': gender,
-                    'hrMax': hr_max, 'hrRest': m_rhr, 'vo2Max': vo2, 
-                    'monthAvgRHR': m_rhr, 'monthAvgHRV': m_hrv,
-                    'zones': {
-                        "z1_u": z1_u, "z2_l": z2_l, "z2_u": z2_u, "z3_l": z3_l, "z3_u": z3_u, "z4_l": z4_l, "z4_u": z4_u, "z5_l": z5_l
-                    }
+                    'hrMax': hr_max, 'hrRest': m_rhr, 'vo2Max': vo2, 'monthAvgRHR': m_rhr, 'monthAvgHRV': m_hrv,
+                    'zones': {"z1_u": z1_u, "z2_l": z2_l, "z2_u": z2_u, "z3_l": z3_l, "z3_u": z3_u, "z4_l": z4_l, "z4_u": z4_u, "z5_l": z5_l}
                 })
-                persist()
-                st.success("Saved!")
+                persist(); st.success("Saved!")
         return selected_tab
-
-# --- TAB RENDERERS ---
 
 def render_training_status():
     st.header(":material/monitor_heart: Training Status")
+    setup_page()
     
     with st.container(border=True):
         c_header, c_date = st.columns([3, 2])
@@ -824,7 +773,10 @@ def render_training_status():
                 st.write("")
                 col_e, col_d = st.columns(2)
                 if col_e.button(":material/edit:", key=f"edit_m_{existing_log['id']}"): st.session_state.edit_morning_date = str(h_date); st.rerun()
-                if col_d.button(":material/delete:", key=f"del_m_{existing_log['id']}"): st.session_state.data['health_logs'] = [h for h in st.session_state.data['health_logs'] if h['id'] != existing_log['id']]; persist(); st.rerun()
+                if col_d.button(":material/delete:", key=f"del_m_{existing_log['id']}"):
+                    if db: db.collection("health_logs").document(str(existing_log['id'])).delete()
+                    st.session_state.data['health_logs'] = [h for h in st.session_state.data['health_logs'] if h['id'] != existing_log['id']]
+                    st.rerun()
         else:
             def_rhr = existing_log['rhr'] if existing_log else 60
             def_hrv = existing_log['hrv'] if existing_log else 40
@@ -838,14 +790,21 @@ def render_training_status():
                 c_btn.write(""); c_btn.write("")
                 if c_btn.form_submit_button(btn_label, use_container_width=True):
                     sleep_dec = parse_time_input(sleep_str)
-                    new_h = {"id": existing_log['id'] if existing_log else int(time.time()), "date": str(h_date), "rhr": rhr, "hrv": hrv, "sleepHours": sleep_dec, "vo2Max": 0}
+                    doc_id = str(existing_log['id']) if existing_log else str(int(time.time()))
+                    new_h = {"id": doc_id, "date": str(h_date), "rhr": rhr, "hrv": hrv, "sleepHours": sleep_dec, "vo2Max": 0}
+                    
+                    if db: db.collection("health_logs").document(doc_id).set(new_h)
+                    
                     if existing_log:
-                        idx = next((i for i, h in enumerate(st.session_state.data['health_logs']) if h['id'] == existing_log['id']), -1)
+                        idx = next((i for i, h in enumerate(st.session_state.data['health_logs']) if str(h['id']) == doc_id), -1)
                         if idx != -1: st.session_state.data['health_logs'][idx] = new_h
-                        st.session_state.edit_morning_date = None; st.success("Updated!")
+                        st.session_state.edit_morning_date = None
+                        st.success("Updated!")
                     else:
-                        st.session_state.data['health_logs'].insert(0, new_h); st.success("Logged!")
-                    persist(); st.rerun()
+                        st.session_state.data['health_logs'].insert(0, new_h)
+                        st.success("Logged!")
+                    if not db: save_data(st.session_state.data)
+                    st.rerun()
             if is_editing:
                 if st.button("Cancel Edit"): st.session_state.edit_morning_date = None; st.rerun()
     
@@ -903,20 +862,25 @@ def render_training_status():
 
 def render_cardio():
     st.header(":material/directions_run: Cardio Training")
+    setup_page()
     runs_df = pd.DataFrame(st.session_state.data['runs'])
     engine = PhysiologyEngine(st.session_state.data['user_profile'])
+    
     if 'run_log_success' in st.session_state and st.session_state.run_log_success:
         st.toast("✅ Activity Logged Successfully!")
         st.session_state.run_log_success = False
+
     edit_run_id = st.session_state.get('edit_run_id', None)
     if 'form_act_type' not in st.session_state: st.session_state.form_act_type = "Run"
+    
     def_type = st.session_state.form_act_type
     def_date = get_malaysia_time()
     def_dist, def_dur, def_hr, def_cad, def_pwr = 0.0, 0.0, 0, 0, 0
     def_notes, def_feel, def_rpe = "", "Normal", 5
     def_z1, def_z2, def_z3, def_z4, def_z5 = "", "", "", "", ""
+    
     if edit_run_id:
-        run_data = next((r for r in st.session_state.data['runs'] if r['id'] == edit_run_id), None)
+        run_data = next((r for r in st.session_state.data['runs'] if str(r['id']) == str(edit_run_id)), None)
         if run_data:
             def_type = run_data['type']
             def_date = datetime.strptime(run_data['date'], '%Y-%m-%d').date()
@@ -934,8 +898,10 @@ def render_cardio():
             def_z4 = format_duration(run_data.get('z4', 0))
             def_z5 = format_duration(run_data.get('z5', 0))
             scroll_to_top()
+
     form_label = f":material/edit: Edit Activity" if edit_run_id else ":material/add_circle: Log Activity"
     expander_state = True if edit_run_id else False
+
     with st.expander(form_label, expanded=expander_state):
         key_suffix = f"{edit_run_id}" if edit_run_id else "new"
         with st.form("run_form", clear_on_submit=True):
@@ -981,18 +947,29 @@ def render_cardio():
             feel = st.radio("Feel", ["Good", "Normal", "Tired", "Pain"], index=feel_idx, horizontal=True, label_visibility="collapsed", key=f"feel_{key_suffix}")
             st.caption("Notes")
             notes = st.text_area("Notes", value=def_notes, placeholder="Easy run, felt strong...", height=3, label_visibility="collapsed", key=f"notes_{key_suffix}")
+            
             if st.form_submit_button("Update Activity" if edit_run_id else "Save Activity"):
-                new_id = int(time.time() * 1000)
+                new_id = str(int(time.time()))
+                doc_id = str(edit_run_id) if edit_run_id else new_id
                 dist_save = dist if dist is not None else 0.0
                 run_obj = {
-                    "id": edit_run_id if edit_run_id else new_id, "date": str(act_date), "type": act_type, "distance": dist_save, "duration": parse_time_input(dur_str), "avgHr": hr, "rpe": rpe, "feel": feel, "cadence": cadence, "power": power, "z1": parse_time_input(z1), "z2": parse_time_input(z2), "z3": parse_time_input(z3), "z4": parse_time_input(z4), "z5": parse_time_input(z5), "notes": notes
+                    "id": doc_id, "date": str(act_date), "type": act_type, "distance": dist_save, 
+                    "duration": parse_time_input(dur_str), "avgHr": hr, "rpe": rpe, "feel": feel, 
+                    "cadence": cadence, "power": power,
+                    "z1": parse_time_input(z1), "z2": parse_time_input(z2), "z3": parse_time_input(z3), 
+                    "z4": parse_time_input(z4), "z5": parse_time_input(z5), "notes": notes
                 }
+                
+                if db: db.collection("runs").document(doc_id).set(run_obj)
+                
                 if edit_run_id:
-                    idx = next((i for i, r in enumerate(st.session_state.data['runs']) if r['id'] == edit_run_id), -1)
+                    idx = next((i for i, r in enumerate(st.session_state.data['runs']) if str(r['id']) == str(edit_run_id)), -1)
                     if idx != -1: st.session_state.data['runs'][idx] = run_obj
                     st.session_state.edit_run_id = None; st.session_state.run_log_success = True
                 else:
                     st.session_state.data['runs'].insert(0, run_obj); st.session_state.run_log_success = True
+                
+                if not db: save_data(st.session_state.data)
                 persist(); st.rerun()
         if edit_run_id:
             if st.button("Cancel Edit"): st.session_state.edit_run_id = None; st.rerun()
@@ -1098,7 +1075,9 @@ def render_cardio():
                         c_metrics.markdown(metrics_html, unsafe_allow_html=True)
                         with c_act:
                             if st.button(":material/edit:", key=f"ed_{row['id']}_{idx}_{filter_cat}"): st.session_state.edit_run_id = row['id']; st.rerun()
-                            if st.button(":material/delete:", key=f"del_{row['id']}_{idx}_{filter_cat}"): st.session_state.data['runs'] = [r for r in st.session_state.data['runs'] if r['id'] != row['id']]; persist(); st.rerun()
+                            if st.button(":material/delete:", key=f"del_{row['id']}_{idx}_{filter_cat}"): 
+                                if db: db.collection("runs").document(str(row['id'])).delete()
+                                st.session_state.data['runs'] = [r for r in st.session_state.data['runs'] if r['id'] != row['id']]; persist(); st.rerun()
                         z_vals = [row.get(f'z{i}', 0) for i in range(1, 6)]
                         total_z_time = sum(z_vals)
                         if total_z_time > 0:
@@ -1136,12 +1115,31 @@ def render_gym():
                     if st.form_submit_button("Create Routine"):
                         ex_list = [x.strip() for x in r_exs.split(",") if x.strip()]
                         new_r = {"id": int(time.time()), "name": r_name, "exercises": ex_list}
-                        st.session_state.data['routines'].append(new_r); persist(); st.success("Routine Created!"); st.rerun()
+                        st.session_state.data['routines'].append(new_r)
+                        if db: 
+                            # Load existing, append, save back (simple array simulation)
+                            # Or ideally use subcollections. Sticking to simple array in single doc for now per load_data logic
+                            # Actually load_data uses 'settings/routines'. Let's update that doc.
+                            routines_doc = db.collection("settings").document("routines").get()
+                            current_list = routines_doc.to_dict().get('list', []) if routines_doc.exists else []
+                            current_list.append(new_r)
+                            db.collection("settings").document("routines").set({'list': current_list})
+                        else:
+                            persist()
+                        st.success("Routine Created!")
+                        st.rerun()
+                
                 for r in st.session_state.data['routines']:
                     c1, c2 = st.columns([5, 1])
-                    c1.markdown(f"**{r['name']}**"); c1.caption(" • ".join(r['exercises']))
+                    c1.markdown(f"**{r['name']}**")
+                    c1.caption(" • ".join(r['exercises']))
                     if c2.button(":material/delete:", key=f"del_rout_{r['id']}"):
-                        st.session_state.data['routines'] = [x for x in st.session_state.data['routines'] if x['id'] != r['id']]; persist(); st.rerun()
+                        st.session_state.data['routines'] = [x for x in st.session_state.data['routines'] if x['id'] != r['id']]
+                        if db:
+                             # Re-save list minus deleted
+                             db.collection("settings").document("routines").set({'list': st.session_state.data['routines']})
+                        else: persist()
+                        st.rerun()
         with col_hist:
             sessions = st.session_state.data['gym_sessions']
             if sessions:
@@ -1155,6 +1153,7 @@ def render_gym():
                         details = ", ".join([f"{ex['name']} ({len(ex['sets'])})" for ex in s['exercises']])
                         c2.caption(details); c2.text(f"Vol: {s.get('totalVolume',0)}kg")
                         if c3.button(":material/delete:", key=f"del_sess_{s['id']}"):
+                            if db: db.collection("gym_sessions").document(str(s['id'])).delete()
                             st.session_state.data['gym_sessions'] = [x for x in st.session_state.data['gym_sessions'] if x['id'] != s['id']]; persist(); st.rerun()
             else: st.info("No gym sessions logged.")
 
@@ -1213,14 +1212,23 @@ def render_gym():
             if clean_sets:
                 final_exercises.append({"name": ex['name'], "sets": clean_sets})
                 current_ex_names.append(ex['name'])
-        new_session = {"id": int(time.time()), "date": str(aw['date']), "routineName": aw['routine_name'], "exercises": final_exercises, "totalVolume": total_vol}
+        new_session = {"id": str(int(time.time())), "date": str(aw['date']), "routineName": aw['routine_name'], "exercises": final_exercises, "totalVolume": total_vol}
         if c1.button(":material/update: Save & Update Routine"):
+            # Update Routine in memory & DB
             for r in st.session_state.data['routines']:
                 if r['id'] == aw['routine_id']: r['exercises'] = current_ex_names; break
-            st.session_state.data['gym_sessions'].insert(0, new_session); persist()
+            if db: db.collection("settings").document("routines").set({'list': st.session_state.data['routines']})
+            
+            # Save Session
+            st.session_state.data['gym_sessions'].insert(0, new_session)
+            if db: db.collection("gym_sessions").document(new_session['id']).set(new_session)
+            
+            persist()
             st.session_state.active_workout = None; st.session_state.gym_save_dialog = False; st.success("Routine updated and workout logged!"); st.rerun()
         if c2.button(":material/save: Just Save Session"):
-            st.session_state.data['gym_sessions'].insert(0, new_session); persist()
+            st.session_state.data['gym_sessions'].insert(0, new_session)
+            if db: db.collection("gym_sessions").document(new_session['id']).set(new_session)
+            persist()
             st.session_state.active_workout = None; st.session_state.gym_save_dialog = False; st.success("Workout logged!"); st.rerun()
         if st.button("Go Back"): st.session_state.gym_save_dialog = False; st.rerun()
 
@@ -1294,6 +1302,48 @@ def render_share():
             report_text = generate_report(start_r, end_r, st.session_state.share_cats)
             st.text_area("Copy this text:", value=report_text, height=400)
 
+def render_plan():
+    st.header(":material/calendar_month: Training Plan")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.container(border=True).markdown("**Macrocycle (Annual)**")
+        macro = st.text_area("Annual Goal", value=st.session_state.data['cycles']['macro'], height=120, key="txt_macro", label_visibility="collapsed")
+        if macro != st.session_state.data['cycles']['macro']:
+            st.session_state.data['cycles']['macro'] = macro
+            if db: db.collection("settings").document("plan").set({'cycles': st.session_state.data['cycles']}, merge=True)
+            else: persist()
+    with c2:
+        st.container(border=True).markdown("**Mesocycle (Block)**")
+        meso = st.text_area("Block Focus", value=st.session_state.data['cycles']['meso'], height=120, key="txt_meso", label_visibility="collapsed")
+        if meso != st.session_state.data['cycles']['meso']:
+            st.session_state.data['cycles']['meso'] = meso
+            if db: db.collection("settings").document("plan").set({'cycles': st.session_state.data['cycles']}, merge=True)
+            else: persist()
+    with c3:
+        st.container(border=True).markdown("**Microcycle (Week)**")
+        micro = st.text_area("Weekly Focus", value=st.session_state.data['cycles']['micro'], height=120, key="txt_micro", label_visibility="collapsed")
+        if micro != st.session_state.data['cycles']['micro']:
+            st.session_state.data['cycles']['micro'] = micro
+            if db: db.collection("settings").document("plan").set({'cycles': st.session_state.data['cycles']}, merge=True)
+            else: persist()
+    st.subheader("Weekly Schedule")
+    days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+    cols = st.columns(7)
+    today_name = get_malaysia_time().strftime("%A")
+    for i, day in enumerate(days):
+        with cols[i]:
+            border_color = "#f97316" if day == today_name else "#e2e8f0"
+            with st.container(border=True):
+                if day == today_name: st.markdown(f"<div style='color:#c2410c; font-weight:bold;'>{day.upper()}</div>", unsafe_allow_html=True)
+                else: st.caption(day.upper())
+                am_val = st.text_input("AM", value=st.session_state.data['weekly_plan'][day]['am'], key=f"am_{day}", placeholder="Rest", label_visibility="collapsed")
+                pm_val = st.text_input("PM", value=st.session_state.data['weekly_plan'][day]['pm'], key=f"pm_{day}", placeholder="Rest", label_visibility="collapsed")
+                if (am_val != st.session_state.data['weekly_plan'][day]['am'] or pm_val != st.session_state.data['weekly_plan'][day]['pm']):
+                    st.session_state.data['weekly_plan'][day]['am'] = am_val
+                    st.session_state.data['weekly_plan'][day]['pm'] = pm_val
+                    if db: db.collection("settings").document("plan").set({'weekly_plan': st.session_state.data['weekly_plan']}, merge=True)
+                    else: persist()
+
 # --- Main App Logic ---
 def main():
     if 'data' not in st.session_state:
@@ -1308,41 +1358,7 @@ def main():
     elif selected_tab == "Gym":
         render_gym()
     elif selected_tab == "Plan":
-        # Plan tab logic (inline for now as it's simple)
-        st.header(":material/calendar_month: Training Plan")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.container(border=True).markdown("**Macrocycle (Annual)**")
-            macro = st.text_area("Annual Goal", value=st.session_state.data['cycles']['macro'], height=120, key="txt_macro", label_visibility="collapsed")
-            if macro != st.session_state.data['cycles']['macro']:
-                st.session_state.data['cycles']['macro'] = macro; persist()
-        with c2:
-            st.container(border=True).markdown("**Mesocycle (Block)**")
-            meso = st.text_area("Block Focus", value=st.session_state.data['cycles']['meso'], height=120, key="txt_meso", label_visibility="collapsed")
-            if meso != st.session_state.data['cycles']['meso']:
-                st.session_state.data['cycles']['meso'] = meso; persist()
-        with c3:
-            st.container(border=True).markdown("**Microcycle (Week)**")
-            micro = st.text_area("Weekly Focus", value=st.session_state.data['cycles']['micro'], height=120, key="txt_micro", label_visibility="collapsed")
-            if micro != st.session_state.data['cycles']['micro']:
-                st.session_state.data['cycles']['micro'] = micro; persist()
-        st.subheader("Weekly Schedule")
-        days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-        cols = st.columns(7)
-        today_name = get_malaysia_time().strftime("%A")
-        for i, day in enumerate(days):
-            with cols[i]:
-                border_color = "#f97316" if day == today_name else "#e2e8f0" # Highlight today
-                with st.container(border=True):
-                    if day == today_name: st.markdown(f"<div style='color:#c2410c; font-weight:bold;'>{day.upper()}</div>", unsafe_allow_html=True)
-                    else: st.caption(day.upper())
-                    
-                    am_val = st.text_input("AM", value=st.session_state.data['weekly_plan'][day]['am'], key=f"am_{day}", placeholder="Rest", label_visibility="collapsed")
-                    pm_val = st.text_input("PM", value=st.session_state.data['weekly_plan'][day]['pm'], key=f"pm_{day}", placeholder="Rest", label_visibility="collapsed")
-                    if (am_val != st.session_state.data['weekly_plan'][day]['am'] or pm_val != st.session_state.data['weekly_plan'][day]['pm']):
-                        st.session_state.data['weekly_plan'][day]['am'] = am_val
-                        st.session_state.data['weekly_plan'][day]['pm'] = pm_val
-                        persist()
+        render_plan()
     elif selected_tab == "Trends":
         render_trends()
     elif selected_tab == "Share":
