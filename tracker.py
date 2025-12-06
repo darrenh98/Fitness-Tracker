@@ -282,7 +282,6 @@ class PhysiologyEngine:
         focus_scores = {'low': 0, 'high': 0, 'anaerobic': 0}
 
         if zones and len(self.zones) > 0:
-            # Granular Calculation per Zone using explicit Midpoints
             z1_mid = (self.hr_rest + float(self.zones.get('z1_u', 130))) / 2
             z2_mid = (float(self.zones.get('z2_l', 131)) + float(self.zones.get('z2_u', 145))) / 2
             z3_mid = (float(self.zones.get('z3_l', 146)) + float(self.zones.get('z3_u', 160))) / 2
@@ -303,12 +302,10 @@ class PhysiologyEngine:
                 else: focus_scores['anaerobic'] += segment_load
                 
         elif avg_hr and avg_hr > 0:
-            # Basic Banister
             hr_reserve = max(0.0, min(1.0, (avg_hr - self.hr_rest) / (self.hr_max - self.hr_rest)))
             exponent = 1.92 if self.gender == 'male' else 1.67
             load = duration_min * hr_reserve * 0.64 * math.exp(exponent * hr_reserve)
             
-            # Fallback classification
             z2_upper = float(self.zones.get('z2_u', 145))
             z4_upper = float(self.zones.get('z4_u', 175))
             if avg_hr > z4_upper: focus_scores['anaerobic'] = load
@@ -337,18 +334,8 @@ class PhysiologyEngine:
         elif te >= 4.0 and te < 5.0: label = "Highly Improving"
         elif te >= 5.0: label = "Overreaching"
         return te, label
-    
-    def get_trimp_label(self, trimp):
-        if trimp < 50: return "Light"
-        if trimp < 100: return "Moderate"
-        if trimp < 200: return "Hard"
-        return "Extreme"
 
     def calculate_training_status(self, activity_history, reference_date=None):
-        """
-        Calculates Acute:Chronic Workload Ratio (ACWR) and Status.
-        Supports reference_date to calculate status for a specific point in time.
-        """
         if reference_date:
             today = reference_date
         else:
@@ -366,9 +353,7 @@ class PhysiologyEngine:
             load = activity.get('load', 0)
             focus = activity.get('focus', {})
             
-            # Only count activities up to the reference date
-            if act_date > today:
-                continue
+            if act_date > today: continue
                 
             if acute_start <= act_date <= today:
                 acute_load += load
@@ -418,99 +403,175 @@ class PhysiologyEngine:
         }
 
 # --- Report Generation ---
-def generate_report(start_date, end_date, selected_cats):
-    report = [f"Training & Physio Report"]
+def generate_report(start_date, end_date, options):
+    report = [f"**Training & Physio Report**"]
     report.append(f"{start_date.strftime('%b %d')} - {end_date.strftime('%b %d')}\n")
     
     engine = PhysiologyEngine(st.session_state.data['user_profile'])
     
-    field_types = [t for t in ["Run", "Walk", "Ultimate"] if t in selected_cats]
-    
-    if field_types:
+    # 1. RUNS / CARDIO
+    if options.get('run') or options.get('walk') or options.get('ultimate'):
+        report.append(f"**CARDIO SESSIONS**")
         runs = st.session_state.data['runs']
+        field_types = []
+        if options.get('run'): field_types.append('Run')
+        if options.get('walk'): field_types.append('Walk')
+        if options.get('ultimate'): field_types.append('Ultimate')
+        
         period_runs = [r for r in runs if start_date <= datetime.strptime(r['date'], '%Y-%m-%d').date() <= end_date and r['type'] in field_types]
         period_runs.sort(key=lambda x: x['date'])
         
-        if period_runs:
+        if not period_runs:
+            report.append("No activities in range.")
+        else:
             total_dist = sum(r['distance'] for r in period_runs)
             total_time = sum(r['duration'] for r in period_runs)
-            report.append(f"ACTIVITIES ({len(period_runs)})")
-            report.append(f"Totals: {total_dist:.1f} km | {format_duration(total_time)}")
+            report.append(f"Total: {total_dist:.1f} km | {format_duration(total_time)}")
             report.append("")
+            
             for r in period_runs:
-                zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
-                trimp, focus = engine.calculate_trimp(float(r['duration']), int(r['avgHr']), zones)
-                te, te_label = engine.get_training_effect(trimp)
                 line = f"- {r['date'][5:]}: {r['type']} {r['distance']}km @ {format_duration(r['duration'])}"
                 metrics = []
                 if r['distance'] > 0 and r['type'] != 'Ultimate': metrics.append(f"{format_pace(r['duration']/r['distance'])}/km")
                 if r['avgHr'] > 0: metrics.append(f"{r['avgHr']}bpm")
-                line += f" ({', '.join(metrics)})" if metrics else ""
+                if metrics: line += f" ({', '.join(metrics)})"
                 report.append(line)
                 
-                # Find dominant focus for summary
-                focus_type = max(focus, key=focus.get) if focus else "low"
-                physio_info = f"   Load: {int(trimp)} ({focus_type.title()}) | TE: {te} {te_label}"
+                # Details based on checkboxes
+                details = []
                 
-                if r.get('rpe'): physio_info += f" | RPE: {r['rpe']}"
-                report.append(physio_info)
-                if r.get('notes'): report.append(f"   Note: {r['notes']}")
+                # Physio
+                if options.get('det_physio'):
+                    zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
+                    trimp, focus = engine.calculate_trimp(float(r['duration']), int(r['avgHr']), zones)
+                    # Find dominant
+                    dom_focus = max(focus, key=focus.get) if focus else "low"
+                    te, te_lbl = engine.get_training_effect(trimp)
+                    details.append(f"Load: {int(trimp)} ({dom_focus.title()}) | TE: {te}")
+                    
+                # Advanced
+                if options.get('det_adv'):
+                    adv = []
+                    if r.get('cadence'): adv.append(f"Cad: {r['cadence']}")
+                    if r.get('power'): adv.append(f"Pwr: {r['power']}")
+                    if adv: details.append(" | ".join(adv))
+                
+                # Zones
+                if options.get('det_zones'):
+                    z_strs = []
+                    for i in range(1,6):
+                        val = float(r.get(f'z{i}', 0))
+                        if val > 0: z_strs.append(f"Z{i}: {format_duration(val)}")
+                    if z_strs: details.append(" | ".join(z_strs))
+                
+                # Notes
+                if options.get('det_notes'):
+                    notes_parts = []
+                    if r.get('rpe'): notes_parts.append(f"RPE: {r['rpe']}")
+                    if r.get('feel'): notes_parts.append(f"Feel: {r['feel']}")
+                    if r.get('notes'): notes_parts.append(f"Note: {r['notes']}")
+                    if notes_parts: details.append(" | ".join(notes_parts))
+                
+                if details:
+                    for d in details:
+                        report.append(f"   {d}")
             report.append("")
-    
-    if "Gym" in selected_cats:
+
+    # 2. GYM
+    if options.get('gym'):
         gyms = st.session_state.data['gym_sessions']
         period_gyms = [g for g in gyms if start_date <= datetime.strptime(g['date'], '%Y-%m-%d').date() <= end_date]
         period_gyms.sort(key=lambda x: x['date'])
         if period_gyms:
-            report.append(f"GYM ({len(period_gyms)})")
+            report.append(f"**GYM**")
             for g in period_gyms:
-                vol = g.get('totalVolume', 0)
-                report.append(f"- {g['date'][5:]}: {g['routineName']} (Vol: {vol:.0f}kg)")
+                report.append(f"- {g['date'][5:]}: {g['routineName']} (Vol: {g.get('totalVolume', 0):.0f}kg)")
+                # List exercises if needed? Keeping brief for now
             report.append("")
 
-    if "Stats" in selected_cats:
+    # 3. HEALTH
+    if options.get('health'):
         stats = st.session_state.data['health_logs']
         period_stats = [s for s in stats if start_date <= datetime.strptime(s['date'], '%Y-%m-%d').date() <= end_date]
         period_stats.sort(key=lambda x: x['date'])
         if period_stats:
-            report.append(f"HEALTH LOG")
+            report.append(f"**HEALTH**")
             for s in period_stats:
-                date_str = s['date'][5:]
-                sleep_str = format_sleep(s.get('sleepHours', 0))
-                daily_target = engine.get_daily_target(s.get('rhr', 0))
-                report.append(f"- {date_str}: Sleep: {sleep_str} | Readiness: {daily_target['readiness']}")
-    
-    # --- Status Snapshot at End of Report Period ---
-    all_runs = st.session_state.data['runs']
-    history_data = []
-    for r in all_runs:
-        zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
-        trimp, focus = engine.calculate_trimp(float(r['duration']), int(r['avgHr']), zones)
-        history_data.append({'date': r['date'], 'load': trimp, 'focus': focus})
-    
-    # Calculate status relative to the end date of the report
-    status = engine.calculate_training_status(history_data, reference_date=end_date)
-    
-    report.append("")
-    report.append(f"STATUS (As of {end_date})")
-    report.append(f"Status: {status['status']}")
-    report.append(f"ACWR: {status['ratio']} (Acute: {status['acute']} / Chronic: {status['chronic']})")
-    buckets = status['buckets']
-    report.append(f"Focus: Low: {int(buckets['low'])} | High: {int(buckets['high'])} | Anaerobic: {int(buckets['anaerobic'])}")
+                dt = engine.get_daily_target(s.get('rhr', 0))
+                report.append(f"- {s['date'][5:]}: Sleep {format_sleep(s.get('sleepHours',0))} | RHR {s.get('rhr')} | {dt['readiness']}")
+            report.append("")
+
+    # 4. STATUS
+    if options.get('status'):
+        all_runs = st.session_state.data['runs']
+        h_data = []
+        for r in all_runs:
+            zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
+            trimp, focus = engine.calculate_trimp(float(r['duration']), int(r['avgHr']), zones)
+            h_data.append({'date': r['date'], 'load': trimp, 'focus': focus})
+            
+        status = engine.calculate_training_status(h_data, reference_date=end_date)
+        report.append(f"**STATUS (As of {end_date})**")
+        report.append(f"State: {status['status']}")
+        report.append(f"ACWR: {status['ratio']} (Acute {status['acute']} / Chronic {status['chronic']})")
+        b = status['buckets']
+        report.append(f"Focus: Low {int(b['low'])} | High {int(b['high'])} | Anaerobic {int(b['anaerobic'])}")
 
     return "\n".join(report)
 
-# --- Sidebar Navigation ---
+# --- Renderers ---
+
+def render_export():
+    st.header(":material/download: Export Data")
+    setup_page()
+    
+    with st.container(border=True):
+        st.subheader("Configuration")
+        
+        c_dates, c_dummy = st.columns([2, 1])
+        d_range = c_dates.date_input("Date Range", value=(get_malaysia_time() - timedelta(days=6), get_malaysia_time()), format="YYYY/MM/DD")
+        start_r, end_r = (d_range if isinstance(d_range, tuple) and len(d_range) == 2 else (d_range[0], d_range[0])) if isinstance(d_range, tuple) else (d_range, d_range)
+        
+        st.divider()
+        
+        st.markdown("**Activity Types**")
+        c1, c2, c3 = st.columns(3)
+        opt_run = c1.checkbox("Run", value=True)
+        opt_walk = c2.checkbox("Walk", value=True)
+        opt_ult = c3.checkbox("Ultimate", value=True)
+        
+        st.markdown("**Data Sections**")
+        c4, c5, c6 = st.columns(3)
+        opt_gym = c4.checkbox("Gym Sessions", value=True)
+        opt_health = c5.checkbox("Health Logs", value=True)
+        opt_status = c6.checkbox("Training Status", value=True)
+        
+        st.markdown("**Run Details**")
+        c7, c8, c9, c10 = st.columns(4)
+        det_physio = c7.checkbox("Physio (HR/Load)", value=True)
+        det_adv = c8.checkbox("Cadence & Power", value=True)
+        det_zones = c9.checkbox("HR Zones", value=True)
+        det_notes = c10.checkbox("Notes & Feel", value=True)
+        
+        st.divider()
+        
+        if st.button("📄 Generate Text Report", type="primary"):
+            options = {
+                'run': opt_run, 'walk': opt_walk, 'ultimate': opt_ult,
+                'gym': opt_gym, 'health': opt_health, 'status': opt_status,
+                'det_physio': det_physio, 'det_adv': det_adv, 'det_zones': det_zones, 'det_notes': det_notes
+            }
+            report_text = generate_report(start_r, end_r, options)
+            st.text_area("Copy this text:", value=report_text, height=500)
+
 def render_sidebar():
     with st.sidebar:
         st.title(":material/sprint: RunLog Hub")
         malaysia_time = get_malaysia_time()
         st.caption(f"🇲🇾 {malaysia_time.strftime('%d %b %Y, %H:%M')}")
-        
         if db: st.caption("🟢 Connected to Firestore")
         else: st.caption("🟠 Local Storage (Offline)")
-             
-        selected_tab = st.radio("Navigate", ["Training Status", "Cardio Training", "Gym", "Plan", "Trends", "Share"], label_visibility="collapsed")
+        selected_tab = st.radio("Navigate", ["Training Status", "Cardio Training", "Gym", "Plan", "Trends", "Export"], label_visibility="collapsed")
         st.divider()
         with st.expander("👤 Athlete Profile"):
             prof = st.session_state.data['user_profile']
@@ -538,35 +599,25 @@ def render_sidebar():
             z4_l = c_z4l.number_input("Z4 Lower", value=int(cz.get('z4_l', 161)))
             z4_u = c_z4u.number_input("Z4 Upper", value=int(cz.get('z4_u', 175)))
             z5_l = st.number_input("Z5 Lower", value=int(cz.get('z5_l', 176)))
-
             if st.button("Save Profile"):
-                new_prof = {
+                st.session_state.data['user_profile'].update({
                     'weight': new_weight, 'height': new_height, 'gender': gender,
-                    'hrMax': hr_max, 'hrRest': m_rhr, 'vo2Max': vo2, 
-                    'monthAvgRHR': m_rhr, 'monthAvgHRV': m_hrv,
+                    'hrMax': hr_max, 'hrRest': m_rhr, 'vo2Max': vo2, 'monthAvgRHR': m_rhr, 'monthAvgHRV': m_hrv,
                     'zones': {"z1_u": z1_u, "z2_l": z2_l, "z2_u": z2_u, "z3_l": z3_l, "z3_u": z3_u, "z4_l": z4_l, "z4_u": z4_u, "z5_l": z5_l}
-                }
-                st.session_state.data['user_profile'].update(new_prof)
-                if db: db.collection("settings").document("profile").set(new_prof)
-                else: save_data(st.session_state.data)
-                st.success("Saved!")
+                })
+                persist(); st.success("Saved!")
         return selected_tab
-
-# --- TAB RENDERERS ---
 
 def render_training_status():
     st.header(":material/monitor_heart: Training Status")
     setup_page()
-    
     with st.container(border=True):
         c_header, c_date = st.columns([3, 2])
         c_header.subheader("☀️ Morning Update")
         h_date = c_date.date_input("Log Date", get_malaysia_time(), label_visibility="collapsed")
         existing_log = next((log for log in st.session_state.data['health_logs'] if log['date'] == str(h_date)), None)
-        
         if 'edit_morning_date' not in st.session_state: st.session_state.edit_morning_date = None
         is_editing = (st.session_state.edit_morning_date == str(h_date))
-        
         if existing_log and not is_editing:
             v1, v2, v3, v4 = st.columns(4)
             v1.metric("Sleep", format_sleep(existing_log['sleepHours']))
@@ -595,22 +646,17 @@ def render_training_status():
                     sleep_dec = parse_time_input(sleep_str)
                     doc_id = str(existing_log['id']) if existing_log else str(int(time.time()))
                     new_h = {"id": doc_id, "date": str(h_date), "rhr": rhr, "hrv": hrv, "sleepHours": sleep_dec, "vo2Max": 0}
-                    
                     if db: db.collection("health_logs").document(doc_id).set(new_h)
-                    
                     if existing_log:
                         idx = next((i for i, h in enumerate(st.session_state.data['health_logs']) if str(h['id']) == doc_id), -1)
                         if idx != -1: st.session_state.data['health_logs'][idx] = new_h
-                        st.session_state.edit_morning_date = None
-                        st.success("Updated!")
+                        st.session_state.edit_morning_date = None; st.success("Updated!")
                     else:
-                        st.session_state.data['health_logs'].insert(0, new_h)
-                        st.success("Logged!")
+                        st.session_state.data['health_logs'].insert(0, new_h); st.success("Logged!")
                     if not db: save_data(st.session_state.data)
                     st.rerun()
             if is_editing:
                 if st.button("Cancel Edit"): st.session_state.edit_morning_date = None; st.rerun()
-    
         display_log = existing_log if existing_log else (st.session_state.data['health_logs'][0] if st.session_state.data['health_logs'] else None)
         if display_log:
             prof = st.session_state.data['user_profile']
@@ -618,7 +664,6 @@ def render_training_status():
             engine = PhysiologyEngine(st.session_state.data['user_profile'])
             target_data = engine.get_daily_target(display_log['rhr'])
             st.markdown(f"""<div class="daily-target" style="border-left: 6px solid {target_data['color']}; background-color: {target_data.get('bg', '#ffffff')};"><div class="target-header"><span style="color: {target_data['color']};">{target_data['readiness']} Readiness</span><span style="font-weight:400; color:#64748b; font-size:0.9rem;">• RHR {display_log['rhr']} (Base {base_rhr})</span></div><div style="font-size: 1.2rem; font-weight:700; color:#1e293b;">{target_data['recommendation']}</div><div class="target-load">Target: {target_data['target_load']}</div><div style="font-size: 0.9rem; color:#475569; font-style:italic;">"{target_data['message']}"</div></div>""", unsafe_allow_html=True)
-
     st.divider()
     engine = PhysiologyEngine(st.session_state.data['user_profile'])
     history_data = []
@@ -629,7 +674,6 @@ def render_training_status():
         te, te_label = engine.get_training_effect(trimp)
         history_data.append({'date': r['date'], 'load': trimp, 'te': te, 'te_lbl': te_label, 'type': r['type'], 'focus': focus})
     status_data = engine.calculate_training_status(history_data)
-    
     with st.container(border=True):
         st.subheader("Physiological Status")
         sc1, sc2 = st.columns([3, 2])
@@ -1098,32 +1142,47 @@ def render_trends():
             st.plotly_chart(fig_pace, use_container_width=True)
 
 def render_share():
-    st.header(":material/share: Share Report")
+    st.header(":material/share: Export Data")
+    setup_page()
+    
     with st.container(border=True):
-        st.subheader("Generate Coach Summary")
+        st.subheader("Configuration")
+        
         c_dates, c_dummy = st.columns([2, 1])
-        with c_dates:
-            d_range = st.date_input("Date Range", value=(get_malaysia_time() - timedelta(days=6), get_malaysia_time()), format="YYYY/MM/DD")
-        if isinstance(d_range, tuple):
-            if len(d_range) == 2: start_r, end_r = d_range
-            elif len(d_range) == 1: start_r, end_r = d_range[0], d_range[0]
-            else: start_r, end_r = datetime.now().date(), datetime.now().date()
-        else: start_r, end_r = d_range, d_range
+        d_range = c_dates.date_input("Date Range", value=(get_malaysia_time() - timedelta(days=6), get_malaysia_time()), format="YYYY/MM/DD")
+        start_r, end_r = (d_range if isinstance(d_range, tuple) and len(d_range) == 2 else (d_range[0], d_range[0])) if isinstance(d_range, tuple) else (d_range, d_range)
+        
         st.divider()
-        st.markdown("**Include Data:**")
-        if 'share_cats' not in st.session_state: st.session_state.share_cats = ["Run", "Walk", "Ultimate", "Gym", "Stats"]
-        all_cats = ["Run", "Walk", "Ultimate", "Gym", "Stats"]
-        cols = st.columns(len(all_cats))
-        for i, cat in enumerate(all_cats):
-            is_selected = cat in st.session_state.share_cats
-            if cols[i].checkbox(cat, value=is_selected, key=f"share_{cat}"):
-                if cat not in st.session_state.share_cats: st.session_state.share_cats.append(cat)
-            else:
-                if cat in st.session_state.share_cats: st.session_state.share_cats.remove(cat)
+        
+        st.markdown("**Activity Types**")
+        c1, c2, c3 = st.columns(3)
+        opt_run = c1.checkbox("Run", value=True)
+        opt_walk = c2.checkbox("Walk", value=True)
+        opt_ult = c3.checkbox("Ultimate", value=True)
+        
+        st.markdown("**Data Sections**")
+        c4, c5, c6 = st.columns(3)
+        opt_gym = c4.checkbox("Gym Sessions", value=True)
+        opt_health = c5.checkbox("Health Logs", value=True)
+        opt_status = c6.checkbox("Training Status", value=True)
+        
+        st.markdown("**Run Details**")
+        c7, c8, c9, c10 = st.columns(4)
+        det_physio = c7.checkbox("Physio (HR/Load)", value=True)
+        det_adv = c8.checkbox("Cadence & Power", value=True)
+        det_zones = c9.checkbox("HR Zones", value=True)
+        det_notes = c10.checkbox("Notes & Feel", value=True)
+        
         st.divider()
+        
         if st.button("📄 Generate Text Report", type="primary"):
-            report_text = generate_report(start_r, end_r, st.session_state.share_cats)
-            st.text_area("Copy this text:", value=report_text, height=400)
+            options = {
+                'run': opt_run, 'walk': opt_walk, 'ultimate': opt_ult,
+                'gym': opt_gym, 'health': opt_health, 'status': opt_status,
+                'det_physio': det_physio, 'det_adv': det_adv, 'det_zones': det_zones, 'det_notes': det_notes
+            }
+            report_text = generate_report(start_r, end_r, options)
+            st.text_area("Copy this text:", value=report_text, height=500)
 
 # --- Main App Logic ---
 def main():
@@ -1142,7 +1201,7 @@ def main():
         render_plan()
     elif selected_tab == "Trends":
         render_trends()
-    elif selected_tab == "Share":
+    elif selected_tab == "Export":
         render_share()
 
 if __name__ == "__main__":
