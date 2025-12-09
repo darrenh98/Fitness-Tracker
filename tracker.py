@@ -118,19 +118,12 @@ DATA_FILE = "run_tracker_data.json"
 DEFAULT_DATA = {
     "runs": [],
     "health_logs": [],
-    "gym_sessions": [],
-    "routines": [
-        {"id": "leg_day", "name": "Leg Day", "exercises": ["Squats", "Split Squats", "Glute Bridges", "Calf Raises"]},
-        {"id": "upper_body", "name": "Upper Body", "exercises": ["Bench Press", "Pull Ups", "Overhead Press", "Rows"]}
-    ],
     "user_profile": {
         "age": 30, "height": 175, "weight": 70, "heightUnit": "cm", "weightUnit": "kg",
         "gender": "Male", "hrMax": 190, "hrRest": 60, "vo2Max": 45,
         "monthAvgRHR": 60, "monthAvgHRV": 40,
         "zones": {"z1_u": 130, "z2_l": 131, "z2_u": 145, "z3_l": 146, "z3_u": 160, "z4_l": 161, "z4_u": 175, "z5_l": 176}
-    },
-    "cycles": {"macro": "", "meso": "", "micro": ""},
-    "weekly_plan": {day: {"am": "", "pm": ""} for day in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']}
+    }
 }
 
 def load_data():
@@ -152,39 +145,20 @@ def load_data():
             r['id'] = doc.id
             data["runs"].append(r)
         
-        # 2. Gym
-        gym_ref = db.collection("gym_sessions").stream()
-        for doc in gym_ref:
-            g = doc.to_dict()
-            g['id'] = doc.id
-            data["gym_sessions"].append(g)
-            
-        # 3. Health
+        # 2. Health
         health_ref = db.collection("health_logs").stream()
         for doc in health_ref:
             h = doc.to_dict()
             h['id'] = doc.id
             data["health_logs"].append(h)
         
-        # 4. Settings
+        # 3. Settings
         settings_ref = db.collection("settings")
         prof_doc = settings_ref.document("profile").get()
         if prof_doc.exists: data['user_profile'].update(prof_doc.to_dict())
-            
-        routines_doc = settings_ref.document("routines").get()
-        if routines_doc.exists:
-            saved_routines = routines_doc.to_dict().get('list', [])
-            if saved_routines: data['routines'] = saved_routines
-            
-        plan_doc = settings_ref.document("plan").get()
-        if plan_doc.exists:
-            plan_data = plan_doc.to_dict()
-            if 'cycles' in plan_data: data['cycles'] = plan_data['cycles']
-            if 'weekly_plan' in plan_data: data['weekly_plan'] = plan_data['weekly_plan']
 
         # Sort
         data["runs"].sort(key=lambda x: x.get('date', ''), reverse=True)
-        data["gym_sessions"].sort(key=lambda x: x.get('date', ''), reverse=True)
         data["health_logs"].sort(key=lambda x: x.get('date', ''), reverse=True)
         
     except Exception as e:
@@ -199,15 +173,6 @@ def save_data(data):
 def persist():
     if not db:
         save_data(st.session_state.data)
-
-def get_last_lift_stats(ex_name):
-    sessions = st.session_state.data.get('gym_sessions', [])
-    if not sessions: return None
-    for s in sessions:
-        for ex in s['exercises']:
-            if ex['name'].lower() == ex_name.lower():
-                return ", ".join([f"{s['reps']}x{s['weight']}kg" for s in ex['sets']])
-    return None
 
 # --- Helper Functions ---
 def get_malaysia_time():
@@ -404,14 +369,14 @@ class PhysiologyEngine:
 
 # --- Report Generation ---
 def generate_report(start_date, end_date, options):
-    report = [f"**Training & Physio Report**"]
+    report = [f"Training & Physio Report"]
     report.append(f"{start_date.strftime('%b %d')} - {end_date.strftime('%b %d')}\n")
     
     engine = PhysiologyEngine(st.session_state.data['user_profile'])
     
     # 1. RUNS / CARDIO
     if options.get('run') or options.get('walk') or options.get('ultimate'):
-        report.append(f"**CARDIO SESSIONS**")
+        report.append(f"CARDIO SESSIONS")
         runs = st.session_state.data['runs']
         field_types = []
         if options.get('run'): field_types.append('Run')
@@ -426,7 +391,7 @@ def generate_report(start_date, end_date, options):
         else:
             total_dist = sum(r['distance'] for r in period_runs)
             total_time = sum(r['duration'] for r in period_runs)
-            report.append(f"Total: {total_dist:.1f} km | {format_duration(total_time)}")
+            report.append(f"Totals: {total_dist:.1f} km | {format_duration(total_time)}")
             report.append("")
             
             for r in period_runs:
@@ -437,26 +402,21 @@ def generate_report(start_date, end_date, options):
                 if metrics: line += f" ({', '.join(metrics)})"
                 report.append(line)
                 
-                # Details based on checkboxes
+                # Details
                 details = []
-                
-                # Physio
                 if options.get('det_physio'):
                     zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
                     trimp, focus = engine.calculate_trimp(float(r['duration']), int(r['avgHr']), zones)
-                    # Find dominant
                     dom_focus = max(focus, key=focus.get) if focus else "low"
                     te, te_lbl = engine.get_training_effect(trimp)
                     details.append(f"Load: {int(trimp)} ({dom_focus.title()}) | TE: {te}")
                     
-                # Advanced
                 if options.get('det_adv'):
                     adv = []
                     if r.get('cadence'): adv.append(f"Cad: {r['cadence']}")
                     if r.get('power'): adv.append(f"Pwr: {r['power']}")
                     if adv: details.append(" | ".join(adv))
                 
-                # Zones
                 if options.get('det_zones'):
                     z_strs = []
                     for i in range(1,6):
@@ -464,7 +424,6 @@ def generate_report(start_date, end_date, options):
                         if val > 0: z_strs.append(f"Z{i}: {format_duration(val)}")
                     if z_strs: details.append(" | ".join(z_strs))
                 
-                # Notes
                 if options.get('det_notes'):
                     notes_parts = []
                     if r.get('rpe'): notes_parts.append(f"RPE: {r['rpe']}")
@@ -477,31 +436,19 @@ def generate_report(start_date, end_date, options):
                         report.append(f"   {d}")
             report.append("")
 
-    # 2. GYM
-    if options.get('gym'):
-        gyms = st.session_state.data['gym_sessions']
-        period_gyms = [g for g in gyms if start_date <= datetime.strptime(g['date'], '%Y-%m-%d').date() <= end_date]
-        period_gyms.sort(key=lambda x: x['date'])
-        if period_gyms:
-            report.append(f"**GYM**")
-            for g in period_gyms:
-                report.append(f"- {g['date'][5:]}: {g['routineName']} (Vol: {g.get('totalVolume', 0):.0f}kg)")
-                # List exercises if needed? Keeping brief for now
-            report.append("")
-
-    # 3. HEALTH
+    # 2. HEALTH
     if options.get('health'):
         stats = st.session_state.data['health_logs']
         period_stats = [s for s in stats if start_date <= datetime.strptime(s['date'], '%Y-%m-%d').date() <= end_date]
         period_stats.sort(key=lambda x: x['date'])
         if period_stats:
-            report.append(f"**HEALTH**")
+            report.append(f"HEALTH LOG")
             for s in period_stats:
                 dt = engine.get_daily_target(s.get('rhr', 0))
                 report.append(f"- {s['date'][5:]}: Sleep {format_sleep(s.get('sleepHours',0))} | RHR {s.get('rhr')} | {dt['readiness']}")
             report.append("")
 
-    # 4. STATUS
+    # 3. STATUS
     if options.get('status'):
         all_runs = st.session_state.data['runs']
         h_data = []
@@ -511,7 +458,7 @@ def generate_report(start_date, end_date, options):
             h_data.append({'date': r['date'], 'load': trimp, 'focus': focus})
             
         status = engine.calculate_training_status(h_data, reference_date=end_date)
-        report.append(f"**STATUS (As of {end_date})**")
+        report.append(f"STATUS (As of {end_date})")
         report.append(f"State: {status['status']}")
         report.append(f"ACWR: {status['ratio']} (Acute {status['acute']} / Chronic {status['chronic']})")
         b = status['buckets']
@@ -541,9 +488,8 @@ def render_export():
         opt_ult = c3.checkbox("Ultimate", value=True)
         
         st.markdown("**Data Sections**")
-        c4, c5, c6 = st.columns(3)
-        opt_gym = c4.checkbox("Gym Sessions", value=True)
-        opt_health = c5.checkbox("Health Logs", value=True)
+        c4, c6 = st.columns(2)
+        opt_health = c4.checkbox("Health Logs", value=True)
         opt_status = c6.checkbox("Training Status", value=True)
         
         st.markdown("**Run Details**")
@@ -558,7 +504,7 @@ def render_export():
         if st.button("📄 Generate Text Report", type="primary"):
             options = {
                 'run': opt_run, 'walk': opt_walk, 'ultimate': opt_ult,
-                'gym': opt_gym, 'health': opt_health, 'status': opt_status,
+                'health': opt_health, 'status': opt_status,
                 'det_physio': det_physio, 'det_adv': det_adv, 'det_zones': det_zones, 'det_notes': det_notes
             }
             report_text = generate_report(start_r, end_r, options)
@@ -571,7 +517,7 @@ def render_sidebar():
         st.caption(f"🇲🇾 {malaysia_time.strftime('%d %b %Y, %H:%M')}")
         if db: st.caption("🟢 Connected to Firestore")
         else: st.caption("🟠 Local Storage (Offline)")
-        selected_tab = st.radio("Navigate", ["Training Status", "Cardio Training", "Gym", "Plan", "Trends", "Export"], label_visibility="collapsed")
+        selected_tab = st.radio("Navigate", ["Training Status", "Cardio Training", "Trends", "Export"], label_visibility="collapsed")
         st.divider()
         with st.expander("👤 Athlete Profile"):
             prof = st.session_state.data['user_profile']
@@ -600,24 +546,31 @@ def render_sidebar():
             z4_u = c_z4u.number_input("Z4 Upper", value=int(cz.get('z4_u', 175)))
             z5_l = st.number_input("Z5 Lower", value=int(cz.get('z5_l', 176)))
             if st.button("Save Profile"):
-                st.session_state.data['user_profile'].update({
+                new_prof = {
                     'weight': new_weight, 'height': new_height, 'gender': gender,
-                    'hrMax': hr_max, 'hrRest': m_rhr, 'vo2Max': vo2, 'monthAvgRHR': m_rhr, 'monthAvgHRV': m_hrv,
+                    'hrMax': hr_max, 'hrRest': m_rhr, 'vo2Max': vo2, 
+                    'monthAvgRHR': m_rhr, 'monthAvgHRV': m_hrv,
                     'zones': {"z1_u": z1_u, "z2_l": z2_l, "z2_u": z2_u, "z3_l": z3_l, "z3_u": z3_u, "z4_l": z4_l, "z4_u": z4_u, "z5_l": z5_l}
-                })
-                persist(); st.success("Saved!")
+                }
+                st.session_state.data['user_profile'].update(new_prof)
+                if db: db.collection("settings").document("profile").set(new_prof)
+                else: save_data(st.session_state.data)
+                st.success("Saved!")
         return selected_tab
 
 def render_training_status():
     st.header(":material/monitor_heart: Training Status")
     setup_page()
+    
     with st.container(border=True):
         c_header, c_date = st.columns([3, 2])
         c_header.subheader("☀️ Morning Update")
         h_date = c_date.date_input("Log Date", get_malaysia_time(), label_visibility="collapsed")
         existing_log = next((log for log in st.session_state.data['health_logs'] if log['date'] == str(h_date)), None)
+        
         if 'edit_morning_date' not in st.session_state: st.session_state.edit_morning_date = None
         is_editing = (st.session_state.edit_morning_date == str(h_date))
+        
         if existing_log and not is_editing:
             v1, v2, v3, v4 = st.columns(4)
             v1.metric("Sleep", format_sleep(existing_log['sleepHours']))
@@ -922,183 +875,6 @@ def render_cardio():
                         if row.get('notes'): st.markdown(f"<div style='margin-top:5px; font-size:0.85rem; color:#475569;'>📝 {row['notes']}</div>", unsafe_allow_html=True)
             else: st.info("No activities found for this category.")
 
-def render_gym():
-    st.header(":material/fitness_center: Gym & Weights")
-    if 'active_workout' not in st.session_state: st.session_state.active_workout = None
-    if 'gym_save_dialog' not in st.session_state: st.session_state.gym_save_dialog = False
-
-    if st.session_state.active_workout is None and not st.session_state.gym_save_dialog:
-        col_rout, col_hist = st.tabs(["Start Workout", "History"])
-        with col_rout:
-            st.subheader("Start from Routine")
-            routine_opts = {r['name']: r for r in st.session_state.data['routines']}
-            if routine_opts:
-                sel_r_name = st.selectbox("Select Routine", list(routine_opts.keys()))
-                if st.button(":material/play_arrow: Start Workout", use_container_width=True):
-                    selected = routine_opts[sel_r_name]
-                    exercises_prep = [{"name": ex_name, "sets": [{"reps": "", "weight": ""} for _ in range(3)]} for ex_name in selected['exercises']]
-                    st.session_state.active_workout = {"routine_id": selected['id'], "routine_name": selected['name'], "date": datetime.now().date(), "exercises": exercises_prep}
-                    st.rerun()
-            else: st.info("No routines found. Create one below.")
-            st.divider()
-            with st.expander("Manage Routines"):
-                with st.form("new_routine"):
-                    r_name = st.text_input("Routine Name (e.g., Pull Day)")
-                    r_exs = st.text_area("Exercises (comma separated)", placeholder="Pullups, Rows, Curls")
-                    if st.form_submit_button("Create Routine"):
-                        ex_list = [x.strip() for x in r_exs.split(",") if x.strip()]
-                        new_r = {"id": int(time.time()), "name": r_name, "exercises": ex_list}
-                        st.session_state.data['routines'].append(new_r)
-                        if db: 
-                            routines_doc = db.collection("settings").document("routines").get()
-                            current_list = routines_doc.to_dict().get('list', []) if routines_doc.exists else []
-                            current_list.append(new_r)
-                            db.collection("settings").document("routines").set({'list': current_list})
-                        else:
-                            persist()
-                        st.success("Routine Created!")
-                        st.rerun()
-                for r in st.session_state.data['routines']:
-                    c1, c2 = st.columns([5, 1])
-                    c1.markdown(f"**{r['name']}**"); c1.caption(" • ".join(r['exercises']))
-                    if c2.button(":material/delete:", key=f"del_rout_{r['id']}"):
-                        st.session_state.data['routines'] = [x for x in st.session_state.data['routines'] if x['id'] != r['id']]
-                        if db:
-                             db.collection("settings").document("routines").set({'list': st.session_state.data['routines']})
-                        else: persist()
-                        st.rerun()
-        with col_hist:
-            sessions = st.session_state.data['gym_sessions']
-            if sessions:
-                total_vol_all = sum(s.get('totalVolume', 0) for s in sessions)
-                with st.container(border=True): st.metric("Total Volume Lifted", f"{total_vol_all/1000:.1f}k kg")
-                st.divider()
-                for s in sessions:
-                    with st.container():
-                        c1, c2, c3 = st.columns([3, 4, 1])
-                        c1.markdown(f"**{s['date']}**"); c1.caption(s['routineName'])
-                        details = ", ".join([f"{ex['name']} ({len(ex['sets'])})" for ex in s['exercises']])
-                        c2.caption(details); c2.text(f"Vol: {s.get('totalVolume',0)}kg")
-                        if c3.button(":material/delete:", key=f"del_sess_{s['id']}"):
-                            if db: db.collection("gym_sessions").document(str(s['id'])).delete()
-                            st.session_state.data['gym_sessions'] = [x for x in st.session_state.data['gym_sessions'] if x['id'] != s['id']]; persist(); st.rerun()
-            else: st.info("No gym sessions logged.")
-
-    elif st.session_state.active_workout is not None and not st.session_state.gym_save_dialog:
-        aw = st.session_state.active_workout
-        c_head, c_canc = st.columns([3, 1])
-        c_head.subheader(f":material/fitness_center: {aw['routine_name']}")
-        if c_canc.button("Cancel"): st.session_state.active_workout = None; st.rerun()
-        aw['date'] = st.date_input("Date", aw['date'])
-        st.divider()
-        exercises_to_remove = []
-        for i, ex in enumerate(aw['exercises']):
-            with st.container(border=True):
-                ch1, ch2, ch3 = st.columns([3, 3, 1])
-                new_name = ch1.text_input(f"Exercise {i+1}", value=ex['name'], key=f"ex_name_{i}")
-                ex['name'] = new_name
-                last_stats = get_last_lift_stats(new_name)
-                if last_stats: ch2.info(f"Last: {last_stats}")
-                else: ch2.caption("No history found")
-                if ch3.button(":material/delete:", key=f"del_ex_{i}"): exercises_to_remove.append(i)
-                st.markdown("""<div style="display:grid; grid-template-columns: 1fr 1fr 0.5fr; gap:10px; font-size:0.8rem; font-weight:600; color:#64748b; margin-bottom:5px;"><div>REPS</div><div>WEIGHT (kg)</div><div></div></div>""", unsafe_allow_html=True)
-                sets_to_remove = []
-                for j, s in enumerate(ex['sets']):
-                    c_reps, c_w, c_del = st.columns([1, 1, 0.5])
-                    s['reps'] = c_reps.text_input("Reps", value=s['reps'], key=f"r_{i}_{j}", label_visibility="collapsed", placeholder="10")
-                    s['weight'] = c_w.text_input("Weight", value=s['weight'], key=f"w_{i}_{j}", label_visibility="collapsed", placeholder="50")
-                    if c_del.button(":material/close:", key=f"del_set_{i}_{j}"): sets_to_remove.append(j)
-                if sets_to_remove:
-                    for index in sorted(sets_to_remove, reverse=True): del ex['sets'][index]
-                    st.rerun()
-                if st.button(f":material/add: Add Set", key=f"add_set_{i}"): ex['sets'].append({"reps": "", "weight": ""}); st.rerun()
-        if exercises_to_remove:
-            for index in sorted(exercises_to_remove, reverse=True): del aw['exercises'][index]
-            st.rerun()
-        if st.button(":material/add_circle: Add New Exercise"): aw['exercises'].append({"name": "New Exercise", "sets": [{"reps": "", "weight": ""} for _ in range(3)]}); st.rerun()
-        st.divider()
-        if st.button(":material/check_circle: Finish Workout", type="primary", use_container_width=True): st.session_state.gym_save_dialog = True; st.rerun()
-
-    elif st.session_state.gym_save_dialog:
-        st.subheader("🎉 Workout Complete!")
-        st.info("You modified the routine structure. Would you like to update the original routine?")
-        aw = st.session_state.active_workout
-        c1, c2 = st.columns(2)
-        final_exercises = []
-        total_vol = 0
-        current_ex_names = []
-        for ex in aw['exercises']:
-            clean_sets = []
-            for s in ex['sets']:
-                try:
-                    r_val = float(s['reps'])
-                    w_val = float(s['weight'])
-                    clean_sets.append({"reps": s['reps'], "weight": s['weight']})
-                    total_vol += r_val * w_val
-                except: continue
-            if clean_sets:
-                final_exercises.append({"name": ex['name'], "sets": clean_sets})
-                current_ex_names.append(ex['name'])
-        new_session = {"id": str(int(time.time())), "date": str(aw['date']), "routineName": aw['routine_name'], "exercises": final_exercises, "totalVolume": total_vol}
-        if c1.button(":material/update: Save & Update Routine"):
-            for r in st.session_state.data['routines']:
-                if r['id'] == aw['routine_id']: r['exercises'] = current_ex_names; break
-            if db: db.collection("settings").document("routines").set({'list': st.session_state.data['routines']})
-            
-            st.session_state.data['gym_sessions'].insert(0, new_session)
-            if db: db.collection("gym_sessions").document(new_session['id']).set(new_session)
-            
-            persist()
-            st.session_state.active_workout = None; st.session_state.gym_save_dialog = False; st.success("Routine updated and workout logged!"); st.rerun()
-        if c2.button(":material/save: Just Save Session"):
-            st.session_state.data['gym_sessions'].insert(0, new_session)
-            if db: db.collection("gym_sessions").document(new_session['id']).set(new_session)
-            persist()
-            st.session_state.active_workout = None; st.session_state.gym_save_dialog = False; st.success("Workout logged!"); st.rerun()
-        if st.button("Go Back"): st.session_state.gym_save_dialog = False; st.rerun()
-
-def render_plan():
-    st.header(":material/calendar_month: Training Plan")
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.container(border=True).markdown("**Macrocycle (Annual)**")
-        macro = st.text_area("Annual Goal", value=st.session_state.data['cycles']['macro'], height=120, key="txt_macro", label_visibility="collapsed")
-        if macro != st.session_state.data['cycles']['macro']:
-            st.session_state.data['cycles']['macro'] = macro
-            if db: db.collection("settings").document("plan").set({'cycles': st.session_state.data['cycles']}, merge=True)
-            else: persist()
-    with c2:
-        st.container(border=True).markdown("**Mesocycle (Block)**")
-        meso = st.text_area("Block Focus", value=st.session_state.data['cycles']['meso'], height=120, key="txt_meso", label_visibility="collapsed")
-        if meso != st.session_state.data['cycles']['meso']:
-            st.session_state.data['cycles']['meso'] = meso
-            if db: db.collection("settings").document("plan").set({'cycles': st.session_state.data['cycles']}, merge=True)
-            else: persist()
-    with c3:
-        st.container(border=True).markdown("**Microcycle (Week)**")
-        micro = st.text_area("Weekly Focus", value=st.session_state.data['cycles']['micro'], height=120, key="txt_micro", label_visibility="collapsed")
-        if micro != st.session_state.data['cycles']['micro']:
-            st.session_state.data['cycles']['micro'] = micro
-            if db: db.collection("settings").document("plan").set({'cycles': st.session_state.data['cycles']}, merge=True)
-            else: persist()
-    st.subheader("Weekly Schedule")
-    days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
-    cols = st.columns(7)
-    today_name = get_malaysia_time().strftime("%A")
-    for i, day in enumerate(days):
-        with cols[i]:
-            border_color = "#f97316" if day == today_name else "#e2e8f0"
-            with st.container(border=True):
-                if day == today_name: st.markdown(f"<div style='color:#c2410c; font-weight:bold;'>{day.upper()}</div>", unsafe_allow_html=True)
-                else: st.caption(day.upper())
-                am_val = st.text_input("AM", value=st.session_state.data['weekly_plan'][day]['am'], key=f"am_{day}", placeholder="Rest", label_visibility="collapsed")
-                pm_val = st.text_input("PM", value=st.session_state.data['weekly_plan'][day]['pm'], key=f"pm_{day}", placeholder="Rest", label_visibility="collapsed")
-                if (am_val != st.session_state.data['weekly_plan'][day]['am'] or pm_val != st.session_state.data['weekly_plan'][day]['pm']):
-                    st.session_state.data['weekly_plan'][day]['am'] = am_val
-                    st.session_state.data['weekly_plan'][day]['pm'] = pm_val
-                    if db: db.collection("settings").document("plan").set({'weekly_plan': st.session_state.data['weekly_plan']}, merge=True)
-                    else: persist()
-
 def render_trends():
     st.header(":material/trending_up: Progress & Trends")
     runs_df = pd.DataFrame(st.session_state.data['runs'])
@@ -1161,9 +937,8 @@ def render_share():
         opt_ult = c3.checkbox("Ultimate", value=True)
         
         st.markdown("**Data Sections**")
-        c4, c5, c6 = st.columns(3)
-        opt_gym = c4.checkbox("Gym Sessions", value=True)
-        opt_health = c5.checkbox("Health Logs", value=True)
+        c4, c6 = st.columns(2)
+        opt_health = c4.checkbox("Health Logs", value=True)
         opt_status = c6.checkbox("Training Status", value=True)
         
         st.markdown("**Run Details**")
@@ -1178,7 +953,7 @@ def render_share():
         if st.button("📄 Generate Text Report", type="primary"):
             options = {
                 'run': opt_run, 'walk': opt_walk, 'ultimate': opt_ult,
-                'gym': opt_gym, 'health': opt_health, 'status': opt_status,
+                'health': opt_health, 'status': opt_status,
                 'det_physio': det_physio, 'det_adv': det_adv, 'det_zones': det_zones, 'det_notes': det_notes
             }
             report_text = generate_report(start_r, end_r, options)
@@ -1195,10 +970,6 @@ def main():
         render_training_status()
     elif selected_tab == "Cardio Training":
         render_cardio()
-    elif selected_tab == "Gym":
-        render_gym()
-    elif selected_tab == "Plan":
-        render_plan()
     elif selected_tab == "Trends":
         render_trends()
     elif selected_tab == "Export":
