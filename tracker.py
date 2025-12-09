@@ -174,6 +174,10 @@ def persist():
     if not db:
         save_data(st.session_state.data)
 
+def get_last_lift_stats(ex_name):
+    # Gym feature removed, returning None
+    return None
+
 # --- Helper Functions ---
 def get_malaysia_time():
     """Returns current time in Malaysia (UTC+8) using timezone-aware object"""
@@ -231,6 +235,10 @@ class PhysiologyEngine:
         self.hr_rest = float(user_profile.get('hrRest', 60))
         self.vo2_max = float(user_profile.get('vo2Max', 45))
         self.gender = user_profile.get('gender', 'Male').lower()
+        
+        # New: Initialize baseline HRV
+        self.hrv_baseline = float(user_profile.get('monthAvgHRV', 40))
+        
         self.zones = user_profile.get('zones', {})
 
     def classify_activity_load(self, load, avg_hr, zones):
@@ -279,12 +287,32 @@ class PhysiologyEngine:
             
         return load, focus_scores
 
-    def get_daily_target(self, current_rhr):
-        diff = current_rhr - self.hr_rest
-        if diff < -2:
+    def get_daily_target(self, current_rhr, current_hrv=None):
+        """
+        Determines daily training target based on Morning RHR AND HRV vs Baseline.
+        """
+        rhr_diff = current_rhr - self.hr_rest
+        # If HRV is provided, calculate difference. If not, ignore HRV factor (0 diff).
+        hrv_diff = (current_hrv - self.hrv_baseline) if current_hrv else 0
+        
+        # Logic: 
+        # RHR suppressed (< -2) AND HRV normal/high (> -5) = PRIME
+        # RHR high (> 5) OR HRV crashed (< -10) = RED/ORANGE
+        
+        is_rhr_good = rhr_diff < -2
+        is_rhr_bad = rhr_diff > 5
+        is_hrv_good = hrv_diff > -5
+        is_hrv_bad = hrv_diff < -10
+
+        if is_rhr_good and is_hrv_good:
             return {"readiness": "High", "recommendation": "Go Hard / Interval Day", "target_load": "Heavy (e.g., Threshold)", "message": "Green light. System primed.", "color": "#65a30d", "bg": "#dcfce7"}
-        elif diff > 5:
-            return {"readiness": "Low", "recommendation": "Active Recovery", "target_load": "Recovery (e.g., 30m easy)", "message": "Red light. Focus on sleep.", "color": "#be123c", "bg": "#fee2e2"}
+        elif is_rhr_bad or is_hrv_bad:
+            # Determine nuance
+            msg = "Red light. Focus on sleep."
+            if is_hrv_bad and not is_rhr_bad: msg = "Sympathetic stress detected."
+            if is_rhr_bad and not is_hrv_bad: msg = "Physiological fatigue detected."
+            
+            return {"readiness": "Low", "recommendation": "Active Recovery", "target_load": "Recovery (e.g., 30m easy)", "message": msg, "color": "#be123c", "bg": "#fee2e2"}
         else:
             return {"readiness": "Moderate", "recommendation": "Steady State", "target_load": "Maintenance (e.g., Z2)", "message": "Train, but keep controlled.", "color": "#ea580c", "bg": "#ffedd5"}
 
@@ -343,9 +371,7 @@ class PhysiologyEngine:
             if acute_load > chronic_load_weekly: status = "Productive"; color_class = "status-green"; description = "Building fitness."
             else: status = "Maintaining"; color_class = "status-green"; description = "Load is consistent."
         else:
-            status = "Recovery / Detraining"
-            color_class = "status-gray"
-            description = "Workload is decreasing."
+            status = "Recovery"; color_class = "status-gray"; description = "Workload is decreasing."
             
         total_chronic = chronic_load_total
         targets = {
@@ -444,8 +470,10 @@ def generate_report(start_date, end_date, options):
         if period_stats:
             report.append(f"HEALTH LOG")
             for s in period_stats:
-                dt = engine.get_daily_target(s.get('rhr', 0))
-                report.append(f"- {s['date'][5:]}: Sleep {format_sleep(s.get('sleepHours',0))} | RHR {s.get('rhr')} | {dt['readiness']}")
+                date_str = s['date'][5:]
+                sleep_str = format_sleep(s.get('sleepHours', 0))
+                daily_target = engine.get_daily_target(s.get('rhr', 0), s.get('hrv'))
+                report.append(f"- {date_str}: Sleep {sleep_str} | RHR {s.get('rhr')} | HRV {s.get('hrv')} | {daily_target['readiness']}")
             report.append("")
 
     # 3. STATUS
@@ -545,6 +573,7 @@ def render_sidebar():
             z4_l = c_z4l.number_input("Z4 Lower", value=int(cz.get('z4_l', 161)))
             z4_u = c_z4u.number_input("Z4 Upper", value=int(cz.get('z4_u', 175)))
             z5_l = st.number_input("Z5 Lower", value=int(cz.get('z5_l', 176)))
+
             if st.button("Save Profile"):
                 new_prof = {
                     'weight': new_weight, 'height': new_height, 'gender': gender,
@@ -610,13 +639,15 @@ def render_training_status():
                     st.rerun()
             if is_editing:
                 if st.button("Cancel Edit"): st.session_state.edit_morning_date = None; st.rerun()
+    
         display_log = existing_log if existing_log else (st.session_state.data['health_logs'][0] if st.session_state.data['health_logs'] else None)
         if display_log:
             prof = st.session_state.data['user_profile']
             base_rhr = prof.get('monthAvgRHR', 60)
             engine = PhysiologyEngine(st.session_state.data['user_profile'])
-            target_data = engine.get_daily_target(display_log['rhr'])
+            target_data = engine.get_daily_target(display_log['rhr'], display_log.get('hrv'))
             st.markdown(f"""<div class="daily-target" style="border-left: 6px solid {target_data['color']}; background-color: {target_data.get('bg', '#ffffff')};"><div class="target-header"><span style="color: {target_data['color']};">{target_data['readiness']} Readiness</span><span style="font-weight:400; color:#64748b; font-size:0.9rem;">• RHR {display_log['rhr']} (Base {base_rhr})</span></div><div style="font-size: 1.2rem; font-weight:700; color:#1e293b;">{target_data['recommendation']}</div><div class="target-load">Target: {target_data['target_load']}</div><div style="font-size: 0.9rem; color:#475569; font-style:italic;">"{target_data['message']}"</div></div>""", unsafe_allow_html=True)
+
     st.divider()
     engine = PhysiologyEngine(st.session_state.data['user_profile'])
     history_data = []
@@ -627,6 +658,7 @@ def render_training_status():
         te, te_label = engine.get_training_effect(trimp)
         history_data.append({'date': r['date'], 'load': trimp, 'te': te, 'te_lbl': te_label, 'type': r['type'], 'focus': focus})
     status_data = engine.calculate_training_status(history_data)
+    
     with st.container(border=True):
         st.subheader("Physiological Status")
         sc1, sc2 = st.columns([3, 2])
