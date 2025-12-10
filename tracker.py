@@ -321,48 +321,60 @@ class PhysiologyEngine:
         else:
             today = get_malaysia_time().date()
             
-        acute_start = today - timedelta(days=6)
-        chronic_start = today - timedelta(days=27)
+        # Get history for the graph (last 28 days from today)
+        history_series = []
         
-        acute_load = 0
-        chronic_load_total = 0
+        # Calculate daily loads for the last 28 days for the graph
+        for i in range(28):
+            d = today - timedelta(days=27-i) # 27 days ago to today
+            day_acute = 0
+            day_chronic_total = 0
+            
+            # ACWR Calculation Window for this specific day 'd'
+            d_acute_start = d - timedelta(days=6)
+            d_chronic_start = d - timedelta(days=27)
+            
+            for activity in activity_history:
+                act_date = datetime.strptime(activity['date'], '%Y-%m-%d').date()
+                if act_date > d: continue # Future relative to 'd'
+                
+                load = activity.get('load', 0)
+                
+                if d_acute_start <= act_date <= d:
+                    day_acute += load
+                if d_chronic_start <= act_date <= d:
+                    day_chronic_total += load
+            
+            day_chronic = day_chronic_total / 4.0 if day_chronic_total > 0 else 1.0
+            ratio = day_acute / day_chronic if day_chronic > 0 else 0
+            
+            history_series.append({
+                'date': d,
+                'acute': day_acute,
+                'chronic': day_chronic,
+                'ratio': ratio,
+                'optimal_min': day_chronic * 0.8,
+                'optimal_max': day_chronic * 1.3
+            })
+
+        # The "Current Status" is just the last entry of the series
+        current_status = history_series[-1]
+        
+        # Recalculate Buckets (Total for the last 4 weeks relative to 'today')
         buckets = {'low': 0, 'high': 0, 'anaerobic': 0}
+        chronic_start_today = today - timedelta(days=27)
         
         for activity in activity_history:
             act_date = datetime.strptime(activity['date'], '%Y-%m-%d').date()
-            load = activity.get('load', 0)
-            focus = activity.get('focus', {})
-            
             if act_date > today: continue
-                
-            if acute_start <= act_date <= today:
-                acute_load += load
-            if chronic_start <= act_date <= today:
-                chronic_load_total += load
-                buckets['low'] += focus.get('low', 0)
-                buckets['high'] += focus.get('high', 0)
-                buckets['anaerobic'] += focus.get('anaerobic', 0)
-        
-        chronic_load_weekly = chronic_load_total / 4.0 if chronic_load_total > 0 else 1.0
-        ratio = acute_load / chronic_load_weekly
-        
-        status = "Recovery"
-        color_class = "status-gray"
-        description = "Load is very low."
-
-        if ratio > 1.5:
-            status = "Overreaching"; color_class = "status-red"; description = "High injury risk! Spike in load."
-        elif 1.3 <= ratio <= 1.5:
-            status = "High Strain"; color_class = "status-orange"; description = "Caution: Rapid load increase."
-        elif 0.8 <= ratio < 1.3:
-            if acute_load > chronic_load_weekly: status = "Productive"; color_class = "status-green"; description = "Building fitness."
-            else: status = "Maintaining"; color_class = "status-green"; description = "Load is consistent."
-        else:
-            status = "Recovery / Detraining"
-            color_class = "status-gray"
-            description = "Workload is decreasing."
             
-        total_chronic = chronic_load_total
+            if chronic_start_today <= act_date <= today:
+                 focus = activity.get('focus', {})
+                 buckets['low'] += focus.get('low', 0)
+                 buckets['high'] += focus.get('high', 0)
+                 buckets['anaerobic'] += focus.get('anaerobic', 0)
+
+        total_chronic = sum(buckets.values())
         targets = {
             'low': {'min': total_chronic * 0.70, 'max': total_chronic * 0.90},
             'high': {'min': total_chronic * 0.10, 'max': total_chronic * 0.25},
@@ -373,13 +385,23 @@ class PhysiologyEngine:
         if buckets['low'] < targets['low']['min']: feedback = "Shortage: Low Aerobic."
         elif buckets['high'] < targets['high']['min']: feedback = "Shortage: High Aerobic."
         elif buckets['anaerobic'] < targets['anaerobic']['min'] and total_chronic > 500: feedback = "Shortage: Anaerobic."
-        elif buckets['low'] > targets['low']['max']: feedback = "Focus: High Volume of Easy work."
+
+        # Determine Status Label
+        ratio = current_status['ratio']
+        if ratio > 1.5:
+            status = "Overreaching"; color_class = "status-red"; description = "High injury risk!"
+        elif 1.3 <= ratio <= 1.5:
+            status = "High Strain"; color_class = "status-orange"; description = "Caution: Rapid increase."
+        elif 0.8 <= ratio < 1.3:
+            status = "Productive"; color_class = "status-green"; description = "Optimal training zone."
+        else:
+            status = "Recovery"; color_class = "status-gray"; description = "Workload decreasing."
 
         return {
-            "acute": round(acute_load), "chronic": round(chronic_load_weekly),
+            "acute": round(current_status['acute']), "chronic": round(current_status['chronic']),
             "ratio": round(ratio, 2), "status": status, "css": color_class,
             "desc": description, "buckets": buckets, "targets": targets,
-            "feedback": feedback, "total_4w": total_chronic
+            "feedback": feedback, "history": history_series
         }
 
 # --- Report Generation ---
@@ -389,77 +411,49 @@ def generate_report(start_date, end_date, options):
     
     engine = PhysiologyEngine(st.session_state.data['user_profile'])
     
-    # 1. RUNS / CARDIO
-    if options.get('run') or options.get('walk') or options.get('ultimate'):
-        report.append(f"CARDIO SESSIONS")
+    field_types = [t for t in ["Run", "Walk", "Ultimate"] if t in selected_cats]
+    
+    if field_types:
         runs = st.session_state.data['runs']
-        field_types = []
-        if options.get('run'): field_types.append('Run')
-        if options.get('walk'): field_types.append('Walk')
-        if options.get('ultimate'): field_types.append('Ultimate')
-        
         period_runs = [r for r in runs if start_date <= datetime.strptime(r['date'], '%Y-%m-%d').date() <= end_date and r['type'] in field_types]
         period_runs.sort(key=lambda x: x['date'])
         
-        if not period_runs:
-            report.append("No activities in range.")
-        else:
+        if period_runs:
             total_dist = sum(r['distance'] for r in period_runs)
             total_time = sum(r['duration'] for r in period_runs)
+            report.append(f"ACTIVITIES ({len(period_runs)})")
             report.append(f"Totals: {total_dist:.1f} km | {format_duration(total_time)}")
             report.append("")
-            
             for r in period_runs:
+                zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
+                trimp, focus = engine.calculate_trimp(float(r['duration']), int(r['avgHr']), zones)
+                te, te_label = engine.get_training_effect(trimp)
                 line = f"- {r['date'][5:]}: {r['type']} {r['distance']}km @ {format_duration(r['duration'])}"
                 metrics = []
                 if r['distance'] > 0 and r['type'] != 'Ultimate': metrics.append(f"{format_pace(r['duration']/r['distance'])}/km")
-                if r.get('avgHr') and r['avgHr'] > 0: metrics.append(f"{r['avgHr']}bpm")
-                if metrics: line += f" ({', '.join(metrics)})"
+                if r['avgHr'] > 0: metrics.append(f"{r['avgHr']}bpm")
+                line += f" ({', '.join(metrics)})" if metrics else ""
                 report.append(line)
                 
-                # Details based on checkboxes
-                details = []
+                focus_type = max(focus, key=focus.get) if focus else "low"
+                physio_info = f"   Load: {int(trimp)} | TE: {te} {te_label}"
                 
-                # Physio
-                if options.get('det_physio'):
-                    zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
-                    trimp, focus = engine.calculate_trimp(float(r['duration']), int(r.get('avgHr', 0)), zones)
-                    # Find dominant
-                    dom_focus = max(focus, key=focus.get) if focus else "low"
-                    te, te_lbl = engine.get_training_effect(trimp)
-                    details.append(f"Load: {int(trimp)} ({dom_focus.title()}) | TE: {te}")
-                    
-                # Advanced
-                if options.get('det_adv'):
-                    adv = []
-                    if r.get('cadence'): adv.append(f"Cad: {r['cadence']}")
-                    if r.get('power'): adv.append(f"Pwr: {r['power']}")
-                    if r.get('elevation'): adv.append(f"Elev: {r['elevation']}m")
-                    if adv: details.append(" | ".join(adv))
-                
-                # Zones
-                if options.get('det_zones'):
-                    z_strs = []
-                    for i in range(1,6):
-                        val = float(r.get(f'z{i}', 0))
-                        if val > 0: z_strs.append(f"Z{i}: {format_duration(val)}")
-                    if z_strs: details.append(" | ".join(z_strs))
-                
-                # Notes
-                if options.get('det_notes'):
-                    notes_parts = []
-                    if r.get('rpe'): notes_parts.append(f"RPE: {r['rpe']}")
-                    if r.get('feel'): notes_parts.append(f"Feel: {r['feel']}")
-                    if r.get('notes'): notes_parts.append(f"Note: {r['notes']}")
-                    if notes_parts: details.append(" | ".join(notes_parts))
-                
-                if details:
-                    for d in details:
-                        report.append(f"   {d}")
+                if r.get('rpe'): physio_info += f" | RPE: {r['rpe']}"
+                report.append(physio_info)
+                if r.get('notes'): report.append(f"   Note: {r['notes']}")
+            report.append("")
+    
+    if "Gym" in selected_cats:
+        gyms = st.session_state.data['gym_sessions']
+        period_gyms = [g for g in gyms if start_date <= datetime.strptime(g['date'], '%Y-%m-%d').date() <= end_date]
+        if period_gyms:
+            report.append(f"GYM ({len(period_gyms)})")
+            for g in period_gyms:
+                vol = g.get('totalVolume', 0)
+                report.append(f"- {g['date'][5:]}: {g['routineName']} (Vol: {vol:.0f}kg)")
             report.append("")
 
-    # 2. HEALTH
-    if options.get('health'):
+    if "Stats" in selected_cats:
         stats = st.session_state.data['health_logs']
         period_stats = [s for s in stats if start_date <= datetime.strptime(s['date'], '%Y-%m-%d').date() <= end_date]
         period_stats.sort(key=lambda x: x['date'])
@@ -469,87 +463,10 @@ def generate_report(start_date, end_date, options):
                 date_str = s['date'][5:]
                 sleep_str = format_sleep(s.get('sleepHours', 0))
                 daily_target = engine.get_daily_target(s.get('rhr', 0), s.get('hrv'), s.get('sleepHours', 0))
-                report.append(f"- {date_str}: Sleep {sleep_str} | RHR {s.get('rhr')} | HRV {s.get('hrv')} | {daily_target['readiness']}")
-            report.append("")
-
-    # 3. STATUS
-    if options.get('status'):
-        all_runs = st.session_state.data['runs']
-        h_data = []
-        for r in all_runs:
-            zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
-            trimp, focus = engine.calculate_trimp(float(r['duration']), int(r.get('avgHr', 0)), zones)
-            h_data.append({'date': r['date'], 'load': trimp, 'focus': focus})
-            
-        status = engine.calculate_training_status(h_data, reference_date=end_date)
-        report.append(f"STATUS (As of {end_date})")
-        report.append(f"State: {status['status']}")
-        report.append(f"ACWR: {status['ratio']} (Acute {status['acute']} / Chronic {status['chronic']})")
-        b = status['buckets']
-        report.append(f"Focus: Low {int(b['low'])} | High {int(b['high'])} | Anaerobic {int(b['anaerobic'])}")
-
+                report.append(f"- {date_str}: Sleep: {sleep_str} | RHR {s.get('rhr')} | Readiness: {daily_target['readiness']}")
     return "\n".join(report)
 
-# --- Renderers ---
-
-def render_export():
-    st.header(":material/download: Export Data")
-    setup_page()
-    
-    with st.container(border=True):
-        st.subheader("Configuration")
-        
-        c_dates, c_dummy = st.columns([2, 1])
-        d_range = c_dates.date_input("Date Range", value=(get_malaysia_time() - timedelta(days=6), get_malaysia_time()), format="YYYY/MM/DD")
-        start_r, end_r = (d_range if isinstance(d_range, tuple) and len(d_range) == 2 else (d_range[0], d_range[0])) if isinstance(d_range, tuple) else (d_range, d_range)
-        
-        st.divider()
-        
-        st.markdown("**Activity Types**")
-        c1, c2, c3 = st.columns(3)
-        opt_run = c1.checkbox("Run", value=True)
-        opt_walk = c2.checkbox("Walk", value=True)
-        opt_ult = c3.checkbox("Ultimate", value=True)
-        
-        st.markdown("**Data Sections**")
-        c4, c6 = st.columns(2)
-        opt_health = c4.checkbox("Health Logs", value=True)
-        opt_status = c6.checkbox("Training Status", value=True)
-        
-        st.markdown("**Run Details**")
-        c7, c8, c9, c10 = st.columns(4)
-        det_physio = c7.checkbox("Physio (HR/Load)", value=True)
-        det_adv = c8.checkbox("Cadence & Power", value=True)
-        det_zones = c9.checkbox("HR Zones", value=True)
-        det_notes = c10.checkbox("Notes & Feel", value=True)
-        
-        st.divider()
-        
-        # New: CSV Download Buttons
-        runs = st.session_state.data.get('runs', [])
-        health = st.session_state.data.get('health_logs', [])
-        
-        if runs:
-            df_runs = pd.DataFrame(runs)
-            csv_runs = df_runs.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Download Activities CSV", data=csv_runs, file_name="activities_export.csv", mime="text/csv")
-            
-        if health:
-            df_health = pd.DataFrame(health)
-            csv_health = df_health.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Download Health CSV", data=csv_health, file_name="health_export.csv", mime="text/csv")
-        
-        st.divider()
-        
-        if st.button("📄 Generate Text Report", type="primary"):
-            options = {
-                'run': opt_run, 'walk': opt_walk, 'ultimate': opt_ult,
-                'health': opt_health, 'status': opt_status,
-                'det_physio': det_physio, 'det_adv': det_adv, 'det_zones': det_zones, 'det_notes': det_notes
-            }
-            report_text = generate_report(start_r, end_r, options)
-            st.text_area("Copy this text:", value=report_text, height=500)
-
+# --- Sidebar Navigation ---
 def render_sidebar():
     with st.sidebar:
         st.title(":material/sprint: RunLog Hub")
@@ -693,7 +610,7 @@ def render_training_status():
     runs = st.session_state.data['runs']
     for r in runs:
         zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
-        trimp, focus = engine.calculate_trimp(float(r['duration']), int(r.get('avgHr', 0)), zones)
+        trimp, focus = engine.calculate_trimp(float(r['duration']), int(r['avgHr']), zones)
         te, te_label = engine.get_training_effect(trimp)
         history_data.append({'date': r['date'], 'load': trimp, 'te': te, 'te_lbl': te_label, 'type': r['type'], 'focus': focus})
     status_data = engine.calculate_training_status(history_data)
@@ -707,29 +624,121 @@ def render_training_status():
         with sc2:
             ratio_val = status_data['ratio']
             st.metric("ACWR", ratio_val, delta=None)
-            gauge_html = f"""<div style="height: 10px; width: 100%; background: #e2e8f0; border-radius: 5px; margin-top: 10px; position: relative;"><div style="height: 100%; width: {min(ratio_val/2.0 * 100, 100)}%; background: {'#22c55e' if 0.8 <= ratio_val <= 1.3 else '#ef4444' if ratio_val > 1.5 else '#f97316'}; border-radius: 5px;"></div><div style="position: absolute; top: -5px; left: 50%; height: 20px; width: 2px; background: black;"></div></div><div style="display: flex; justify-content: space-between; font-size: 0.7rem; color: #64748b;"><span>0.0</span><span>1.0</span><span>2.0+</span></div>"""
-            st.markdown(gauge_html, unsafe_allow_html=True)
+    
+    # --- Graph: Green Tunnel (Chronic Load vs Acute Load) ---
+    # Prepare data for Plotly
+    history_df = pd.DataFrame(status_data['history'])
+    if not history_df.empty:
+        fig_tunnel = go.Figure()
+        
+        # 1. Optimal Band (Green Tunnel) - Area
+        # We start with the upper bound line, then fill down to lower bound
+        fig_tunnel.add_trace(go.Scatter(
+            x=history_df['date'], y=history_df['optimal_max'],
+            mode='lines', line=dict(width=0), showlegend=False, hoverinfo='skip'
+        ))
+        fig_tunnel.add_trace(go.Scatter(
+            x=history_df['date'], y=history_df['optimal_min'],
+            mode='lines', line=dict(width=0), fill='tonexty', 
+            fillcolor='rgba(34, 197, 94, 0.2)', # Green with opacity
+            name='Optimal Band'
+        ))
+        
+        # 2. Actual Acute Load Line
+        fig_tunnel.add_trace(go.Scatter(
+            x=history_df['date'], y=history_df['acute'],
+            mode='lines+markers', line=dict(color='#0f172a', width=3),
+            name='Acute Load'
+        ))
+        
+        fig_tunnel.update_layout(
+            title="Training Load (Chronic vs Acute)",
+            xaxis_title="", yaxis_title="Load",
+            margin=dict(l=20, r=20, t=40, b=20),
+            height=300,
+            showlegend=True,
+            plot_bgcolor='white',
+            hovermode="x unified"
+        )
+        st.plotly_chart(fig_tunnel, use_container_width=True)
+
+    # --- Metrics: Acute vs Chronic ---
     c1, c2 = st.columns(2)
     with c1: st.metric("Acute Load (7d)", int(status_data['acute']))
     with c2: st.metric("Chronic Load (28d)", int(status_data['chronic']))
+    
     st.divider()
-    st.subheader("Load Focus (4 weeks)")
+    
+    # --- Spider Chart: Load Focus ---
+    st.subheader("Load Focus")
     buckets = status_data['buckets']
     targets = status_data['targets']
-    total_4w = status_data['total_4w']
-    max_scale = max(targets['low']['max'], buckets['low'], 1) * 1.2
-    def draw_focus_bar(label, current, t_min, t_max, color):
-        curr_pct = min((current / max_scale) * 100, 100)
-        min_pct = min((t_min / max_scale) * 100, 100)
-        max_pct = min((t_max / max_scale) * 100, 100)
-        width_pct = max_pct - min_pct
-        if current < t_min: status_txt = "Shortage"
-        elif current > t_max: status_txt = "Over-focus"
-        else: status_txt = "Balanced"
-        return f"""<div style="margin-bottom: 12px;"><div class="load-label"><span>{label}</span> <span>{int(current)} <span style="font-weight:400; font-size:0.7rem;">({status_txt})</span></span></div><div class="load-bar-container"><div class="load-bar-target" style="left: {min_pct}%; width: {width_pct}%;"></div><div class="load-bar-fill" style="width: {curr_pct}%; background-color: {color}; opacity: 0.8;"></div></div></div>"""
-    st.markdown(draw_focus_bar("Anaerobic (Purple)", buckets['anaerobic'], targets['anaerobic']['min'], targets['anaerobic']['max'], "#8b5cf6"), unsafe_allow_html=True)
-    st.markdown(draw_focus_bar("High Aerobic (Orange)", buckets['high'], targets['high']['min'], targets['high']['max'], "#f97316"), unsafe_allow_html=True)
-    st.markdown(draw_focus_bar("Low Aerobic (Blue)", buckets['low'], targets['low']['min'], targets['low']['max'], "#3b82f6"), unsafe_allow_html=True)
+    
+    # Prepare Data
+    categories = ['Low Aerobic', 'High Aerobic', 'Anaerobic']
+    actual_values = [buckets['low'], buckets['high'], buckets['anaerobic']]
+    # Target values (using max as the outer edge reference)
+    target_values = [targets['low']['max'], targets['high']['max'], targets['anaerobic']['max']]
+    
+    # Create Radar
+    fig_radar = go.Figure()
+    
+    # Target Trace (Background)
+    fig_radar.add_trace(go.Scatterpolar(
+        r=target_values,
+        theta=categories,
+        fill='toself',
+        name='Target Zone',
+        line=dict(color='rgba(200, 200, 200, 0.5)'),
+        fillcolor='rgba(200, 200, 200, 0.2)'
+    ))
+    
+    # Actual Trace
+    fig_radar.add_trace(go.Scatterpolar(
+        r=actual_values,
+        theta=categories,
+        fill='toself',
+        name='Current Load',
+        line=dict(color='#c2410c'), # Rust color
+        fillcolor='rgba(194, 65, 12, 0.4)'
+    ))
+    
+    fig_radar.update_layout(
+        polar=dict(
+            radialaxis=dict(visible=True, range=[0, max(max(actual_values), max(target_values)) * 1.1])
+        ),
+        showlegend=True,
+        height=350,
+        margin=dict(l=40, r=40, t=20, b=20)
+    )
+    
+    st.plotly_chart(fig_radar, use_container_width=True)
+    
+    # --- Sparklines for RHR & HRV ---
+    st.divider()
+    st.subheader("Recovery Trends (7 Days)")
+    
+    # Get last 7 days of health data
+    health_logs = st.session_state.data['health_logs']
+    df_health = pd.DataFrame(health_logs)
+    if not df_health.empty:
+        df_health['date_obj'] = pd.to_datetime(df_health['date'])
+        # Sort and take last 7
+        df_7d = df_health.sort_values('date_obj').tail(7)
+        
+        col_rhr, col_hrv = st.columns(2)
+        
+        with col_rhr:
+            fig_rhr = px.line(df_7d, x='date_obj', y='rhr', title="Resting HR", markers=True)
+            fig_rhr.update_traces(line_color='#be123c') # Red
+            fig_rhr.update_layout(height=200, margin=dict(l=20, r=20, t=30, b=20), xaxis_title=None, yaxis_title=None)
+            st.plotly_chart(fig_rhr, use_container_width=True)
+            
+        with col_hrv:
+            fig_hrv = px.line(df_7d, x='date_obj', y='hrv', title="HRV", markers=True)
+            fig_hrv.update_traces(line_color='#65a30d') # Green
+            fig_hrv.update_layout(height=200, margin=dict(l=20, r=20, t=30, b=20), xaxis_title=None, yaxis_title=None)
+            st.plotly_chart(fig_hrv, use_container_width=True)
 
 def render_cardio():
     st.header(":material/directions_run: Cardio Training")
@@ -756,8 +765,6 @@ def render_cardio():
             def_hr = run_data['avgHr']
             def_cad = run_data.get('cadence', 0)
             def_pwr = run_data.get('power', 0)
-            def_elev = run_data.get('elevation', 0)
-            def_shoe = run_data.get('shoe_id', 'Default Shoe')
             def_notes = run_data.get('notes', '')
             def_feel = run_data.get('feel', 'Normal')
             def_rpe = run_data.get('rpe', 5)
@@ -802,14 +809,6 @@ def render_cardio():
             with c6:
                 st.caption("Power (w)")
                 power = st.number_input("Power", min_value=0, value=int(def_pwr), label_visibility="collapsed", key=f"pwr_{key_suffix}")
-            
-            c_g1, c_g2 = st.columns(2)
-            with c_g1:
-                st.caption("Elevation (m)")
-                elev = st.number_input("Elevation", min_value=0, value=int(def_elev), label_visibility="collapsed", key=f"elev_{key_suffix}")
-            with c_g2:
-                st.write("") # Spacer since shoes are removed
-
             st.caption("Heart Rate Zones (Time in mm:ss)")
             rc1, rc2, rc3, rc4, rc5 = st.columns(5)
             z1 = rc1.text_input("Zone 1", value=def_z1, placeholder="00:00", key=f"z1_{key_suffix}")
@@ -826,13 +825,8 @@ def render_cardio():
                 new_id = str(int(time.time()))
                 doc_id = str(edit_run_id) if edit_run_id else new_id
                 dist_save = dist if dist is not None else 0.0
-                
                 run_obj = {
-                    "id": doc_id, "date": str(act_date), "type": act_type, "distance": dist_save, 
-                    "duration": parse_time_input(dur_str), "avgHr": hr, "rpe": rpe, "feel": feel, 
-                    "cadence": cadence, "power": power, "elevation": elev, "shoe_id": "default",
-                    "z1": parse_time_input(z1), "z2": parse_time_input(z2), "z3": parse_time_input(z3), 
-                    "z4": parse_time_input(z4), "z5": parse_time_input(z5), "notes": notes
+                    "id": doc_id, "date": str(act_date), "type": act_type, "distance": dist_save, "duration": parse_time_input(dur_str), "avgHr": hr, "rpe": rpe, "feel": feel, "cadence": cadence, "power": power, "z1": parse_time_input(z1), "z2": parse_time_input(z2), "z3": parse_time_input(z3), "z4": parse_time_input(z4), "z5": parse_time_input(z5), "notes": notes
                 }
                 if db: db.collection("runs").document(doc_id).set(run_obj)
                 if edit_run_id:
@@ -923,11 +917,8 @@ def render_cardio():
                 filtered_df = filtered_df.sort_values(by='dt_obj', ascending=False)
                 for idx, row in filtered_df.iterrows():
                     zones = [float(row.get(f'z{i}', 0)) for i in range(1,6)]
-                    trimp, focus = engine.calculate_trimp(float(row['duration']), int(row.get('avgHr', 0)), zones)
+                    trimp, focus = engine.calculate_trimp(float(row['duration']), int(row['avgHr']), zones)
                     te, te_label = engine.get_training_effect(trimp)
-                    
-                    elev = row.get('elevation', 0)
-                    
                     with st.container(border=True):
                         c_date, c_type, c_stats, c_metrics, c_act = st.columns([1.5, 1.2, 2.5, 2.5, 1])
                         icon_map = {"Run": ":material/directions_run:", "Walk": ":material/directions_walk:", "Ultimate": ":material/sports_handball:"}
@@ -937,21 +928,15 @@ def render_cardio():
                         stats_html = f"""<div style="line-height: 1.5;"><span class="history-sub">Dist:</span> <span class="history-value">{row['distance']}km</span><br><span class="history-sub">Time:</span> <span class="history-value">{format_duration(row['duration'])}</span><br><span class="history-sub">{'Note' if row['type'] == 'Ultimate' else 'Pace'}:</span> <span class="history-value">{row.get('notes','-') if row['type']=='Ultimate' else format_pace(row['duration']/row['distance'] if row['distance']>0 else 0)+'/km'}</span></div>"""
                         c_stats.markdown(stats_html, unsafe_allow_html=True)
                         metrics_list = []
-                        if row.get('avgHr') and row['avgHr'] > 0: metrics_list.append(f"<span class='history-sub'>HR:</span> <span class='history-value'>{row['avgHr']}</span>")
+                        if row['avgHr'] > 0: metrics_list.append(f"<span class='history-sub'>HR:</span> <span class='history-value'>{row['avgHr']}</span>")
                         metrics_list.append(f"<span class='history-sub'>Load:</span> <span class='history-value'>{int(trimp)}</span>")
                         metrics_list.append(f"<span class='history-sub'>TE:</span> <span class='history-value status-badge { 'status-green' if 2<=te<4 else 'status-orange' if te>=4 else 'status-gray' }' style='font-size:0.75rem; padding:1px 6px;'>{te} {te_label.split()[0]}</span>")
                         extras = []
                         if row.get('cadence', 0) > 0: extras.append(f"Cad: {row['cadence']}")
                         if row.get('power', 0) > 0: extras.append(f"Pwr: {row['power']}")
-                        if elev > 0: extras.append(f"Elev: {elev}m") # Elevation
                         if extras: metrics_list.append(f"<span class='history-sub'>{' | '.join(extras)}</span>")
-                        
-                        # Feel
                         feel_val = row.get('feel', '')
-                        bottom_line = []
-                        if feel_val: bottom_line.append(f"Feel: {feel_val}")
-                        if bottom_line: metrics_list.append(f"<span class='history-sub'>{' | '.join(bottom_line)}</span>")
-                        
+                        if feel_val: metrics_list.append(f"<span class='history-sub'>Feel:</span> <span class='history-value'>{feel_val}</span>")
                         metrics_html = "<div style='line-height: 1.5;'>" + "<br>".join(metrics_list) + "</div>"
                         c_metrics.markdown(metrics_html, unsafe_allow_html=True)
                         with c_act:
