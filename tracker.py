@@ -411,36 +411,44 @@ def generate_report(start_date, end_date, options):
     
     engine = PhysiologyEngine(st.session_state.data['user_profile'])
     
-    field_types = [t for t in ["Run", "Walk", "Ultimate"] if t in selected_cats]
-    
+    # 1. RUNS / CARDIO
+    field_types = []
+    if options.get('run'): field_types.append('Run')
+    if options.get('walk'): field_types.append('Walk')
+    if options.get('ultimate'): field_types.append('Ultimate')
+
     if field_types:
+        report.append(f"CARDIO SESSIONS")
         runs = st.session_state.data['runs']
+        
         period_runs = [r for r in runs if start_date <= datetime.strptime(r['date'], '%Y-%m-%d').date() <= end_date and r['type'] in field_types]
         period_runs.sort(key=lambda x: x['date'])
         
-        if period_runs:
+        if not period_runs:
+            report.append("No activities in range.")
+        else:
             total_dist = sum(r['distance'] for r in period_runs)
             total_time = sum(r['duration'] for r in period_runs)
-            report.append(f"ACTIVITIES ({len(period_runs)})")
             report.append(f"Totals: {total_dist:.1f} km | {format_duration(total_time)}")
             report.append("")
+            
             for r in period_runs:
-                zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
-                trimp, focus = engine.calculate_trimp(float(r['duration']), int(r.get('avgHr', 0)), zones)
-                # Find dominant focus type
-                focus_type = max(focus, key=focus.get) if focus else "low"
-                te, te_label = engine.get_training_effect(trimp)
                 line = f"- {r['date'][5:]}: {r['type']} {r['distance']}km @ {format_duration(r['duration'])}"
                 metrics = []
                 if r['distance'] > 0 and r['type'] != 'Ultimate': metrics.append(f"{format_pace(r['duration']/r['distance'])}/km")
                 if r.get('avgHr') and r['avgHr'] > 0: metrics.append(f"{r['avgHr']}bpm")
-                line += f" ({', '.join(metrics)})" if metrics else ""
+                if metrics: line += f" ({', '.join(metrics)})"
                 report.append(line)
                 
-                # Details based on checkboxes
+                # Details
                 details = []
+                zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
+                trimp, focus = engine.calculate_trimp(float(r['duration']), int(r.get('avgHr', 0)), zones)
+                dom_focus = max(focus, key=focus.get) if focus else "low"
+                te, te_lbl = engine.get_training_effect(trimp)
+
                 if options.get('det_physio'):
-                    details.append(f"Load: {int(trimp)} ({focus_type.title()}) | TE: {te} {te_label}")
+                    details.append(f"Load: {int(trimp)} ({dom_focus.title()}) | TE: {te} {te_lbl}")
                     
                 if options.get('det_adv'):
                     adv = []
@@ -468,7 +476,8 @@ def generate_report(start_date, end_date, options):
                         report.append(f"   {d}")
             report.append("")
 
-    if "Stats" in selected_cats:
+    # 2. HEALTH
+    if options.get('health'):
         stats = st.session_state.data['health_logs']
         period_stats = [s for s in stats if start_date <= datetime.strptime(s['date'], '%Y-%m-%d').date() <= end_date]
         period_stats.sort(key=lambda x: x['date'])
@@ -478,9 +487,10 @@ def generate_report(start_date, end_date, options):
                 date_str = s['date'][5:]
                 sleep_str = format_sleep(s.get('sleepHours', 0))
                 daily_target = engine.get_daily_target(s.get('rhr', 0), s.get('hrv'), s.get('sleepHours', 0))
-                report.append(f"- {date_str}: Sleep: {sleep_str} | RHR {s.get('rhr')} | HRV {s.get('hrv')} | {daily_target['readiness']}")
-    
-    # --- Status Snapshot at End of Report Period ---
+                report.append(f"- {date_str}: Sleep: {sleep_str} | RHR {s.get('rhr')} | HRV {s.get('hrv', '-')} | {daily_target['readiness']}")
+            report.append("")
+
+    # 3. STATUS
     if options.get('status'):
         all_runs = st.session_state.data['runs']
         h_data = []
@@ -488,14 +498,13 @@ def generate_report(start_date, end_date, options):
             zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
             trimp, focus = engine.calculate_trimp(float(r['duration']), int(r.get('avgHr', 0)), zones)
             h_data.append({'date': r['date'], 'load': trimp, 'focus': focus})
-        
+            
         status = engine.calculate_training_status(h_data, reference_date=end_date)
-        report.append("")
         report.append(f"STATUS (As of {end_date})")
         report.append(f"State: {status['status']}")
-        report.append(f"ACWR: {status['ratio']} (Acute: {status['acute']} / Chronic: {status['chronic']})")
-        buckets = status['buckets']
-        report.append(f"Focus: Low: {int(buckets['low'])} | High: {int(buckets['high'])} | Anaerobic: {int(buckets['anaerobic'])}")
+        report.append(f"ACWR: {status['ratio']} (Acute {status['acute']} / Chronic {status['chronic']})")
+        b = status['buckets']
+        report.append(f"Focus: Low {int(b['low'])} | High {int(b['high'])} | Anaerobic {int(b['anaerobic'])}")
 
     return "\n".join(report)
 
@@ -573,12 +582,12 @@ def render_training_status():
         
         if existing_log and not is_editing:
             rhr_diff = existing_log['rhr'] - base_rhr
-            hrv_diff = existing_log['hrv'] - base_hrv
+            hrv_diff = existing_log.get('hrv', 40) - base_hrv
             
             v1, v2, v3, v4 = st.columns(4)
             v1.metric("Sleep", format_sleep(existing_log['sleepHours']))
             v2.metric("RHR", f"{existing_log['rhr']}", f"{rhr_diff} bpm", delta_color="inverse")
-            v3.metric("HRV", f"{existing_log['hrv']}", f"{hrv_diff} ms")
+            v3.metric("HRV", f"{existing_log.get('hrv', '-')}", f"{hrv_diff} ms")
             with v4:
                 st.write("")
                 col_e, col_d = st.columns(2)
@@ -699,6 +708,7 @@ def render_training_status():
     targets = status_data['targets']
     total_4w = status_data['total_4w']
     max_scale = max(targets['low']['max'], buckets['low'], 1) * 1.2
+    
     def draw_focus_bar(label, current, t_min, t_max, color):
         curr_pct = min((current / max_scale) * 100, 100)
         min_pct = min((t_min / max_scale) * 100, 100)
@@ -708,6 +718,7 @@ def render_training_status():
         elif current > t_max: status_txt = "Over-focus"
         else: status_txt = "Balanced"
         return f"""<div style="margin-bottom: 12px;"><div class="load-label"><span>{label}</span> <span>{int(current)} <span style="font-weight:400; font-size:0.7rem;">({status_txt})</span></span></div><div class="load-bar-container"><div class="load-bar-target" style="left: {min_pct}%; width: {width_pct}%;"></div><div class="load-bar-fill" style="width: {curr_pct}%; background-color: {color}; opacity: 0.8;"></div></div></div>"""
+    
     st.markdown(draw_focus_bar("Anaerobic (Purple)", buckets['anaerobic'], targets['anaerobic']['min'], targets['anaerobic']['max'], "#8b5cf6"), unsafe_allow_html=True)
     st.markdown(draw_focus_bar("High Aerobic (Orange)", buckets['high'], targets['high']['min'], targets['high']['max'], "#f97316"), unsafe_allow_html=True)
     st.markdown(draw_focus_bar("Low Aerobic (Blue)", buckets['low'], targets['low']['min'], targets['low']['max'], "#3b82f6"), unsafe_allow_html=True)
@@ -1077,7 +1088,7 @@ def render_share():
                 'health': opt_health, 'status': opt_status,
                 'det_physio': det_physio, 'det_adv': det_adv, 'det_zones': det_zones, 'det_notes': det_notes
             }
-            report_text = generate_report(start_r, end_r, selected_cats) # Pass selected_cats as expected by the func
+            report_text = generate_report(start_r, end_r, options)
             st.text_area("Copy this text:", value=report_text, height=500)
 
 # --- Main App Logic ---
