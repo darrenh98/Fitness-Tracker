@@ -539,8 +539,10 @@ def render_sidebar():
         st.title(":material/sprint: RunLog Hub")
         malaysia_time = get_malaysia_time()
         st.caption(f"🇲🇾 {malaysia_time.strftime('%d %b %Y, %H:%M')}")
+        
         if db: st.caption("🟢 Connected to Firestore")
         else: st.caption("🟠 Local Storage (Offline)")
+             
         selected_tab = st.radio("Navigate", ["Training Status", "Cardio Training", "Trends", "Export"], label_visibility="collapsed")
         st.divider()
         with st.expander("👤 Athlete Profile"):
@@ -653,21 +655,20 @@ def render_training_status():
             target_data = engine.get_daily_target(display_log['rhr'], display_log.get('hrv', 40), display_log.get('sleepHours', 0))
             
             st.markdown(f"""
-            <div class="daily-target" style="border-left: 6px solid {target_data['color']}; background-color: {target_data.get('bg', '#ffffff')};">
-                <div class="target-header">
-                    <span style="color: {target_data['color']};">{target_data['readiness']} Readiness</span>
-                </div>
-                <div style="font-size: 1.2rem; font-weight:700; color:#1e293b;">{target_data['recommendation']}</div>
-                <div class="target-load">Target: {target_data['target_load']}</div>
-                <div style="font-size: 0.9rem; color:#475569; font-style:italic; margin-bottom:10px;">"{target_data['message']}"</div>
-                
-                <div class="bio-row">
-                    <div class="bio-item"><b>RHR:</b> {display_log['rhr']} <span style="font-size:0.75em">({target_data['rhr_stat']})</span></div>
-                    <div class="bio-item"><b>HRV:</b> {display_log['hrv']} <span style="font-size:0.75em">({target_data['hrv_stat']})</span></div>
-                    <div class="bio-item"><b>Sleep:</b> {format_sleep(display_log['sleepHours'])} <span style="font-size:0.75em">({target_data['sleep_stat']})</span></div>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+<div class="daily-target" style="border-left: 6px solid {target_data['color']}; background-color: {target_data.get('bg', '#ffffff')};">
+    <div class="target-header">
+        <span style="color: {target_data['color']};">{target_data['readiness']} Readiness</span>
+    </div>
+    <div style="font-size: 1.2rem; font-weight:700; color:#1e293b;">{target_data['recommendation']}</div>
+    <div class="target-load">Target: {target_data['target_load']}</div>
+    <div style="font-size: 0.9rem; color:#475569; font-style:italic; margin-bottom:10px;">"{target_data['message']}"</div>
+    <div class="bio-row">
+        <div class="bio-item"><b>RHR:</b> {display_log['rhr']} <span style="font-size:0.75em">({target_data['rhr_stat']})</span></div>
+        <div class="bio-item"><b>HRV:</b> {display_log.get('hrv', '-')} <span style="font-size:0.75em">({target_data['hrv_stat']})</span></div>
+        <div class="bio-item"><b>Sleep:</b> {format_sleep(display_log['sleepHours'])} <span style="font-size:0.75em">({target_data['sleep_stat']})</span></div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
     st.divider()
     engine = PhysiologyEngine(st.session_state.data['user_profile'])
