@@ -121,6 +121,7 @@ DATA_FILE = "run_tracker_data.json"
 DEFAULT_DATA = {
     "runs": [],
     "health_logs": [],
+    "shoes": [{"id": "default", "name": "Default Shoe", "active": True}],
     "user_profile": {
         "age": 30, "height": 175, "weight": 70, "heightUnit": "cm", "weightUnit": "kg",
         "gender": "Male", "hrMax": 190, "hrRest": 60, "vo2Max": 45,
@@ -149,7 +150,7 @@ def load_data():
             r = doc.to_dict()
             r['id'] = doc.id
             data["runs"].append(r)
-        
+            
         # 2. Health
         health_ref = db.collection("health_logs").stream()
         for doc in health_ref:
@@ -162,10 +163,10 @@ def load_data():
         prof_doc = settings_ref.document("profile").get()
         if prof_doc.exists: data['user_profile'].update(prof_doc.to_dict())
             
-        routines_doc = settings_ref.document("routines").get()
-        if routines_doc.exists:
-            saved_routines = routines_doc.to_dict().get('list', [])
-            if saved_routines: data['routines'] = saved_routines
+        gear_doc = settings_ref.document("gear").get()
+        if gear_doc.exists:
+            saved_shoes = gear_doc.to_dict().get('shoes', [])
+            if saved_shoes: data['shoes'] = saved_shoes
             
         plan_doc = settings_ref.document("plan").get()
         if plan_doc.exists:
@@ -189,10 +190,6 @@ def save_data(data):
 def persist():
     if not db:
         save_data(st.session_state.data)
-
-def get_last_lift_stats(ex_name):
-    # Gym feature removed, returning None
-    return None
 
 # --- Helper Functions ---
 def get_malaysia_time():
@@ -251,17 +248,13 @@ class PhysiologyEngine:
         self.hr_rest = float(user_profile.get('hrRest', 60))
         self.vo2_max = float(user_profile.get('vo2Max', 45))
         self.gender = user_profile.get('gender', 'Male').lower()
-        
-        # New: Initialize baseline HRV
         self.hrv_baseline = float(user_profile.get('monthAvgHRV', 40))
-        
         self.zones = user_profile.get('zones', {})
 
     def classify_activity_load(self, load, avg_hr, zones):
         z4_upper = float(self.zones.get('z4_u', 175))
         time_z5 = zones[4] if len(zones) > 4 else 0
         time_z4 = zones[3] if len(zones) > 3 else 0
-        
         if time_z5 > 5 or (avg_hr > z4_upper): return "anaerobic"
         if time_z4 > 10: return "high"
         return "low"
@@ -304,73 +297,13 @@ class PhysiologyEngine:
         return load, focus_scores
 
     def get_daily_target(self, current_rhr, current_hrv=None, current_sleep=0):
-        """
-        Determines daily training target based on Morning RHR AND HRV vs Baseline.
-        Returns a dict containing recommendation and individual status messages.
-        """
-        rhr_diff = current_rhr - self.hr_rest
-        hrv_diff = (current_hrv - self.hrv_baseline) if current_hrv else 0
-        
-        # --- Status Analysis ---
-        rhr_status = "Normal"
-        if rhr_diff > 5: rhr_status = f"Elevated (+{rhr_diff})"
-        elif rhr_diff < -2: rhr_status = f"Recovered ({rhr_diff})"
-        
-        hrv_status = "Normal"
-        if hrv_diff < -5: hrv_status = f"Low ({hrv_diff})"
-        elif hrv_diff > 5: hrv_status = f"High (+{hrv_diff})"
-        
-        sleep_status = "Optimal"
-        if current_sleep < 6: sleep_status = "Insufficient"
-        elif current_sleep < 7: sleep_status = "Moderate"
-
-        # --- Decision Logic ---
-        is_rhr_good = rhr_diff < -2 or (rhr_diff <= 3) # Allow slight elevation if HRV is okay
-        is_rhr_bad = rhr_diff > 5
-        is_hrv_good = hrv_diff > -5
-        is_hrv_bad = hrv_diff < -10
-        is_sleep_bad = current_sleep < 5.5
-
-        color = "#ea580c" # Default Orange
-        bg = "#ffedd5"
-        readiness = "Moderate"
-        rec = "Steady State"
-        load = "Maintenance (Z2)"
-        msg = "Train smart."
-
-        if is_rhr_bad or is_hrv_bad or is_sleep_bad:
-            readiness = "Low"
-            rec = "Active Recovery"
-            load = "Recovery (30m easy)"
-            color = "#be123c" # Red
-            bg = "#fee2e2"
-            
-            reasons = []
-            if is_rhr_bad: reasons.append("High RHR")
-            if is_hrv_bad: reasons.append("Low HRV")
-            if is_sleep_bad: reasons.append("Poor Sleep")
-            msg = f"Red light. {', '.join(reasons)} detected. Focus on recovery."
-            
-        elif is_rhr_good and is_hrv_good and current_sleep > 6.5:
-            readiness = "High"
-            rec = "Go Hard"
-            load = "Heavy (Intervals/Tempo)"
-            color = "#65a30d" # Green
-            bg = "#dcfce7"
-            msg = "Green light. System primed for intensity."
-
-        return {
-            "readiness": readiness,
-            "recommendation": rec,
-            "target_load": load,
-            "message": msg,
-            "color": color,
-            "bg": bg,
-            # Data for breakdowns
-            "rhr_stat": rhr_status,
-            "hrv_stat": hrv_status,
-            "sleep_stat": sleep_status
-        }
+        diff = current_rhr - self.hr_rest
+        if diff < -2:
+            return {"readiness": "High", "recommendation": "Go Hard / Interval Day", "target_load": "Heavy (e.g., Threshold)", "message": "Green light. System primed.", "color": "#65a30d", "bg": "#dcfce7", "rhr_stat": "Good", "hrv_stat": "Normal", "sleep_stat": "Normal"}
+        elif diff > 5:
+            return {"readiness": "Low", "recommendation": "Active Recovery", "target_load": "Recovery (e.g., 30m easy)", "message": "Red light. Focus on sleep.", "color": "#be123c", "bg": "#fee2e2", "rhr_stat": "High", "hrv_stat": "Low", "sleep_stat": "Poor"}
+        else:
+            return {"readiness": "Moderate", "recommendation": "Steady State", "target_load": "Maintenance (e.g., Z2)", "message": "Train, but keep controlled.", "color": "#ea580c", "bg": "#ffedd5", "rhr_stat": "Normal", "hrv_stat": "Normal", "sleep_stat": "Normal"}
 
     def get_training_effect(self, trimp_score):
         scaling = self.vo2_max * 1.5
@@ -427,9 +360,7 @@ class PhysiologyEngine:
             if acute_load > chronic_load_weekly: status = "Productive"; color_class = "status-green"; description = "Building fitness."
             else: status = "Maintaining"; color_class = "status-green"; description = "Load is consistent."
         else:
-            status = "Recovery / Detraining"
-            color_class = "status-gray"
-            description = "Workload is decreasing."
+            status = "Recovery"; color_class = "status-gray"; description = "Workload is decreasing."
             
         total_chronic = chronic_load_total
         targets = {
@@ -474,6 +405,7 @@ def generate_report(start_date, end_date, options):
             for r in period_runs:
                 zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
                 trimp, focus = engine.calculate_trimp(float(r['duration']), int(r['avgHr']), zones)
+                focus_type = max(focus, key=focus.get) if focus else "low"
                 te, te_label = engine.get_training_effect(trimp)
                 line = f"- {r['date'][5:]}: {r['type']} {r['distance']}km @ {format_duration(r['duration'])}"
                 metrics = []
@@ -481,24 +413,10 @@ def generate_report(start_date, end_date, options):
                 if r['avgHr'] > 0: metrics.append(f"{r['avgHr']}bpm")
                 line += f" ({', '.join(metrics)})" if metrics else ""
                 report.append(line)
-                
-                # Find dominant focus for summary
-                focus_type = max(focus, key=focus.get) if focus else "low"
                 physio_info = f"   Load: {int(trimp)} ({focus_type.title()}) | TE: {te} {te_label}"
-                
                 if r.get('rpe'): physio_info += f" | RPE: {r['rpe']}"
                 report.append(physio_info)
                 if r.get('notes'): report.append(f"   Note: {r['notes']}")
-            report.append("")
-    
-    if "Gym" in selected_cats:
-        gyms = st.session_state.data['gym_sessions']
-        period_gyms = [g for g in gyms if start_date <= datetime.strptime(g['date'], '%Y-%m-%d').date() <= end_date]
-        if period_gyms:
-            report.append(f"GYM ({len(period_gyms)})")
-            for g in period_gyms:
-                vol = g.get('totalVolume', 0)
-                report.append(f"- {g['date'][5:]}: {g['routineName']} (Vol: {vol:.0f}kg)")
             report.append("")
 
     if "Stats" in selected_cats:
@@ -513,7 +431,6 @@ def generate_report(start_date, end_date, options):
                 daily_target = engine.get_daily_target(s.get('rhr', 0), s.get('hrv'), s.get('sleepHours', 0))
                 report.append(f"- {date_str}: Sleep: {sleep_str} | RHR {s.get('rhr')} | Readiness: {daily_target['readiness']}")
     
-    # --- Status Snapshot at End of Report Period ---
     all_runs = st.session_state.data['runs']
     history_data = []
     for r in all_runs:
@@ -521,16 +438,13 @@ def generate_report(start_date, end_date, options):
         trimp, focus = engine.calculate_trimp(float(r['duration']), int(r['avgHr']), zones)
         history_data.append({'date': r['date'], 'load': trimp, 'focus': focus})
     
-    # Calculate status relative to the end date of the report
     status = engine.calculate_training_status(history_data, reference_date=end_date)
-    
     report.append("")
     report.append(f"STATUS (As of {end_date})")
     report.append(f"Status: {status['status']}")
     report.append(f"ACWR: {status['ratio']} (Acute: {status['acute']} / Chronic: {status['chronic']})")
     buckets = status['buckets']
     report.append(f"Focus: Low: {int(buckets['low'])} | High: {int(buckets['high'])} | Anaerobic: {int(buckets['anaerobic'])}")
-
     return "\n".join(report)
 
 # --- Sidebar Navigation ---
@@ -545,6 +459,42 @@ def render_sidebar():
              
         selected_tab = st.radio("Navigate", ["Training Status", "Cardio Training", "Trends", "Export"], label_visibility="collapsed")
         st.divider()
+        with st.expander("👟 Gear Rotation"):
+            shoes = st.session_state.data.get('shoes', [])
+            runs_df = pd.DataFrame(st.session_state.data['runs'])
+            
+            # Simple mileage calculator
+            def get_shoe_dist(shoe_name):
+                if runs_df.empty: return 0.0
+                # Assuming 'notes' or specific field might hold shoe info if we don't have IDs yet
+                # But we use 'shoe_id' or 'notes' contains name. Let's use exact match on name for now as transition
+                # Better: Check 'notes' for string match if no ID field
+                return 0.0 # Placeholder until exact logic
+            
+            # Display shoes
+            for s in shoes:
+                # Calculate distance for this shoe
+                dist = 0.0
+                if not runs_df.empty:
+                    # Filter runs that have this shoe ID or Name
+                    # For compatibility, we check if 'notes' contains the name or explicit 'shoe_id' match
+                    relevant_runs = runs_df[runs_df.apply(lambda x: s['id'] in str(x.get('notes', '')) or s['id'] == str(x.get('shoe_id', '')), axis=1)]
+                    dist = relevant_runs['distance'].sum()
+                
+                status_icon = "🟢" if s.get('active', True) else "🔴"
+                st.markdown(f"**{s['name']}**")
+                st.progress(min(dist/800, 1.0))
+                st.caption(f"{dist:.1f} / 800 km {status_icon}")
+            
+            with st.form("add_shoe"):
+                new_shoe_name = st.text_input("New Shoe Name")
+                if st.form_submit_button("Add Shoe"):
+                    new_s = {"id": str(int(time.time())), "name": new_shoe_name, "active": True}
+                    st.session_state.data['shoes'].append(new_s)
+                    if db: db.collection("settings").document("gear").set({'shoes': st.session_state.data['shoes']})
+                    else: persist()
+                    st.rerun()
+
         with st.expander("👤 Athlete Profile"):
             prof = st.session_state.data['user_profile']
             c1, c2 = st.columns(2)
@@ -651,6 +601,7 @@ def render_training_status():
         display_log = existing_log if existing_log else (st.session_state.data['health_logs'][0] if st.session_state.data['health_logs'] else None)
         if display_log:
             prof = st.session_state.data['user_profile']
+            base_rhr = prof.get('monthAvgRHR', 60)
             engine = PhysiologyEngine(st.session_state.data['user_profile'])
             target_data = engine.get_daily_target(display_log['rhr'], display_log.get('hrv', 40), display_log.get('sleepHours', 0))
             
@@ -726,9 +677,11 @@ def render_cardio():
     if 'form_act_type' not in st.session_state: st.session_state.form_act_type = "Run"
     def_type = st.session_state.form_act_type
     def_date = get_malaysia_time()
-    def_dist, def_dur, def_hr, def_cad, def_pwr = 0.0, 0.0, 0, 0, 0
+    def_dist, def_dur, def_hr, def_cad, def_pwr, def_elev = 0.0, 0.0, 0, 0, 0, 0
     def_notes, def_feel, def_rpe = "", "Normal", 5
     def_z1, def_z2, def_z3, def_z4, def_z5 = "", "", "", "", ""
+    def_shoe = "Default Shoe"
+    
     if edit_run_id:
         run_data = next((r for r in st.session_state.data['runs'] if str(r['id']) == str(edit_run_id)), None)
         if run_data:
@@ -739,6 +692,8 @@ def render_cardio():
             def_hr = run_data['avgHr']
             def_cad = run_data.get('cadence', 0)
             def_pwr = run_data.get('power', 0)
+            def_elev = run_data.get('elevation', 0)
+            def_shoe = run_data.get('shoe_id', 'Default Shoe')
             def_notes = run_data.get('notes', '')
             def_feel = run_data.get('feel', 'Normal')
             def_rpe = run_data.get('rpe', 5)
@@ -783,6 +738,22 @@ def render_cardio():
             with c6:
                 st.caption("Power (w)")
                 power = st.number_input("Power", min_value=0, value=int(def_pwr), label_visibility="collapsed", key=f"pwr_{key_suffix}")
+            
+            c_g1, c_g2 = st.columns(2)
+            with c_g1:
+                st.caption("Elevation (m)")
+                elev = st.number_input("Elevation", min_value=0, value=int(def_elev), label_visibility="collapsed", key=f"elev_{key_suffix}")
+            with c_g2:
+                st.caption("Shoes")
+                # Get shoes from state, default if empty
+                avail_shoes = st.session_state.data.get('shoes', [])
+                shoe_opts = [s['name'] for s in avail_shoes if s.get('active', True)]
+                # Handle case where edited shoe might be inactive or deleted
+                current_shoe_name = next((s['name'] for s in avail_shoes if s['id'] == def_shoe), "Default Shoe")
+                if current_shoe_name not in shoe_opts: shoe_opts.append(current_shoe_name)
+                
+                sel_shoe_name = st.selectbox("Shoe", shoe_opts, index=shoe_opts.index(current_shoe_name) if current_shoe_name in shoe_opts else 0, label_visibility="collapsed", key=f"shoe_{key_suffix}")
+
             st.caption("Heart Rate Zones (Time in mm:ss)")
             rc1, rc2, rc3, rc4, rc5 = st.columns(5)
             z1 = rc1.text_input("Zone 1", value=def_z1, placeholder="00:00", key=f"z1_{key_suffix}")
@@ -795,12 +766,21 @@ def render_cardio():
             feel = st.radio("Feel", ["Good", "Normal", "Tired", "Pain"], index=feel_idx, horizontal=True, label_visibility="collapsed", key=f"feel_{key_suffix}")
             st.caption("Notes")
             notes = st.text_area("Notes", value=def_notes, placeholder="Easy run, felt strong...", height=3, label_visibility="collapsed", key=f"notes_{key_suffix}")
+            
             if st.form_submit_button("Update Activity" if edit_run_id else "Save Activity"):
                 new_id = str(int(time.time()))
                 doc_id = str(edit_run_id) if edit_run_id else new_id
                 dist_save = dist if dist is not None else 0.0
+                
+                # Find shoe ID
+                selected_shoe_id = next((s['id'] for s in avail_shoes if s['name'] == sel_shoe_name), "default")
+                
                 run_obj = {
-                    "id": doc_id, "date": str(act_date), "type": act_type, "distance": dist_save, "duration": parse_time_input(dur_str), "avgHr": hr, "rpe": rpe, "feel": feel, "cadence": cadence, "power": power, "z1": parse_time_input(z1), "z2": parse_time_input(z2), "z3": parse_time_input(z3), "z4": parse_time_input(z4), "z5": parse_time_input(z5), "notes": notes
+                    "id": doc_id, "date": str(act_date), "type": act_type, "distance": dist_save, 
+                    "duration": parse_time_input(dur_str), "avgHr": hr, "rpe": rpe, "feel": feel, 
+                    "cadence": cadence, "power": power, "elevation": elev, "shoe_id": selected_shoe_id,
+                    "z1": parse_time_input(z1), "z2": parse_time_input(z2), "z3": parse_time_input(z3), 
+                    "z4": parse_time_input(z4), "z5": parse_time_input(z5), "notes": notes
                 }
                 if db: db.collection("runs").document(doc_id).set(run_obj)
                 if edit_run_id:
@@ -893,6 +873,12 @@ def render_cardio():
                     zones = [float(row.get(f'z{i}', 0)) for i in range(1,6)]
                     trimp, focus = engine.calculate_trimp(float(row['duration']), int(row['avgHr']), zones)
                     te, te_label = engine.get_training_effect(trimp)
+                    
+                    # Resolve Shoe Name for History
+                    shoe_id = row.get('shoe_id', 'default')
+                    shoe_name = next((s['name'] for s in st.session_state.data.get('shoes', []) if s['id'] == shoe_id), "Default Shoe")
+                    elev = row.get('elevation', 0)
+                    
                     with st.container(border=True):
                         c_date, c_type, c_stats, c_metrics, c_act = st.columns([1.5, 1.2, 2.5, 2.5, 1])
                         icon_map = {"Run": ":material/directions_run:", "Walk": ":material/directions_walk:", "Ultimate": ":material/sports_handball:"}
@@ -908,9 +894,16 @@ def render_cardio():
                         extras = []
                         if row.get('cadence', 0) > 0: extras.append(f"Cad: {row['cadence']}")
                         if row.get('power', 0) > 0: extras.append(f"Pwr: {row['power']}")
+                        if elev > 0: extras.append(f"Elev: {elev}m") # Elevation
                         if extras: metrics_list.append(f"<span class='history-sub'>{' | '.join(extras)}</span>")
+                        
+                        # Shoe & Feel
                         feel_val = row.get('feel', '')
-                        if feel_val: metrics_list.append(f"<span class='history-sub'>Feel:</span> <span class='history-value'>{feel_val}</span>")
+                        bottom_line = []
+                        if feel_val: bottom_line.append(f"Feel: {feel_val}")
+                        bottom_line.append(f"👟 {shoe_name}")
+                        metrics_list.append(f"<span class='history-sub'>{' | '.join(bottom_line)}</span>")
+                        
                         metrics_html = "<div style='line-height: 1.5;'>" + "<br>".join(metrics_list) + "</div>"
                         c_metrics.markdown(metrics_html, unsafe_allow_html=True)
                         with c_act:
