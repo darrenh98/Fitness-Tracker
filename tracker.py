@@ -389,7 +389,7 @@ class PhysiologyEngine:
         # Determine Status Label
         ratio = current_status['ratio']
         if ratio > 1.5:
-            status = "Overreaching"; color_class = "status-red"; description = "High injury risk!"
+            status = "Overreaching"; color_class = "status-red"; description = "High injury risk! Spike in load."
         elif 1.3 <= ratio <= 1.5:
             status = "High Strain"; color_class = "status-orange"; description = "Caution: Rapid increase."
         elif 0.8 <= ratio < 1.3:
@@ -401,7 +401,7 @@ class PhysiologyEngine:
             "acute": round(current_status['acute']), "chronic": round(current_status['chronic']),
             "ratio": round(ratio, 2), "status": status, "css": color_class,
             "desc": description, "buckets": buckets, "targets": targets,
-            "feedback": feedback, "history": history_series
+            "feedback": feedback, "history": history_series, "total_4w": total_chronic
         }
 
 # --- Report Generation ---
@@ -435,8 +435,9 @@ def generate_report(start_date, end_date, options):
                 line += f" ({', '.join(metrics)})" if metrics else ""
                 report.append(line)
                 
+                # Find dominant focus for summary
                 focus_type = max(focus, key=focus.get) if focus else "low"
-                physio_info = f"   Load: {int(trimp)} | TE: {te} {te_label}"
+                physio_info = f"   Load: {int(trimp)} ({focus_type.title()}) | TE: {te} {te_label}"
                 
                 if r.get('rpe'): physio_info += f" | RPE: {r['rpe']}"
                 report.append(physio_info)
@@ -444,14 +445,8 @@ def generate_report(start_date, end_date, options):
             report.append("")
     
     if "Gym" in selected_cats:
-        gyms = st.session_state.data['gym_sessions']
-        period_gyms = [g for g in gyms if start_date <= datetime.strptime(g['date'], '%Y-%m-%d').date() <= end_date]
-        if period_gyms:
-            report.append(f"GYM ({len(period_gyms)})")
-            for g in period_gyms:
-                vol = g.get('totalVolume', 0)
-                report.append(f"- {g['date'][5:]}: {g['routineName']} (Vol: {vol:.0f}kg)")
-            report.append("")
+        # Removed Gym section from report since feature is removed
+        pass
 
     if "Stats" in selected_cats:
         stats = st.session_state.data['health_logs']
@@ -464,6 +459,22 @@ def generate_report(start_date, end_date, options):
                 sleep_str = format_sleep(s.get('sleepHours', 0))
                 daily_target = engine.get_daily_target(s.get('rhr', 0), s.get('hrv'), s.get('sleepHours', 0))
                 report.append(f"- {date_str}: Sleep: {sleep_str} | RHR {s.get('rhr')} | Readiness: {daily_target['readiness']}")
+    
+    # --- Status Snapshot at End of Report Period ---
+    all_runs = st.session_state.data['runs']
+    history_data = []
+    for r in all_runs:
+        zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
+        trimp, focus = engine.calculate_trimp(float(r['duration']), int(r['avgHr']), zones)
+        history_data.append({'date': r['date'], 'load': trimp, 'focus': focus})
+    
+    status = engine.calculate_training_status(history_data, reference_date=end_date)
+    report.append("")
+    report.append(f"STATUS (As of {end_date})")
+    report.append(f"Status: {status['status']}")
+    report.append(f"ACWR: {status['ratio']} (Acute: {status['acute']} / Chronic: {status['chronic']})")
+    buckets = status['buckets']
+    report.append(f"Focus: Low: {int(buckets['low'])} | High: {int(buckets['high'])} | Anaerobic: {int(buckets['anaerobic'])}")
     return "\n".join(report)
 
 # --- Sidebar Navigation ---
@@ -626,13 +637,9 @@ def render_training_status():
             st.metric("ACWR", ratio_val, delta=None)
     
     # --- Graph: Green Tunnel (Chronic Load vs Acute Load) ---
-    # Prepare data for Plotly
     history_df = pd.DataFrame(status_data['history'])
     if not history_df.empty:
         fig_tunnel = go.Figure()
-        
-        # 1. Optimal Band (Green Tunnel) - Area
-        # We start with the upper bound line, then fill down to lower bound
         fig_tunnel.add_trace(go.Scatter(
             x=history_df['date'], y=history_df['optimal_max'],
             mode='lines', line=dict(width=0), showlegend=False, hoverinfo='skip'
@@ -643,14 +650,11 @@ def render_training_status():
             fillcolor='rgba(34, 197, 94, 0.2)', # Green with opacity
             name='Optimal Band'
         ))
-        
-        # 2. Actual Acute Load Line
         fig_tunnel.add_trace(go.Scatter(
             x=history_df['date'], y=history_df['acute'],
             mode='lines+markers', line=dict(color='#0f172a', width=3),
             name='Acute Load'
         ))
-        
         fig_tunnel.update_layout(
             title="Training Load (Chronic vs Acute)",
             xaxis_title="", yaxis_title="Load",
@@ -662,81 +666,49 @@ def render_training_status():
         )
         st.plotly_chart(fig_tunnel, use_container_width=True)
 
-    # --- Metrics: Acute vs Chronic ---
     c1, c2 = st.columns(2)
     with c1: st.metric("Acute Load (7d)", int(status_data['acute']))
     with c2: st.metric("Chronic Load (28d)", int(status_data['chronic']))
     
     st.divider()
-    
-    # --- Spider Chart: Load Focus ---
-    st.subheader("Load Focus")
+    st.subheader("Load Focus (4 weeks)")
     buckets = status_data['buckets']
     targets = status_data['targets']
+    total_4w = status_data['total_4w']
+    max_scale = max(targets['low']['max'], buckets['low'], 1) * 1.2
     
-    # Prepare Data
-    categories = ['Low Aerobic', 'High Aerobic', 'Anaerobic']
-    actual_values = [buckets['low'], buckets['high'], buckets['anaerobic']]
-    # Target values (using max as the outer edge reference)
-    target_values = [targets['low']['max'], targets['high']['max'], targets['anaerobic']['max']]
+    def draw_focus_bar(label, current, t_min, t_max, color):
+        curr_pct = min((current / max_scale) * 100, 100)
+        min_pct = min((t_min / max_scale) * 100, 100)
+        max_pct = min((t_max / max_scale) * 100, 100)
+        width_pct = max_pct - min_pct
+        if current < t_min: status_txt = "Shortage"
+        elif current > t_max: status_txt = "Over-focus"
+        else: status_txt = "Balanced"
+        return f"""<div style="margin-bottom: 12px;"><div class="load-label"><span>{label}</span> <span>{int(current)} <span style="font-weight:400; font-size:0.7rem;">({status_txt})</span></span></div><div class="load-bar-container"><div class="load-bar-target" style="left: {min_pct}%; width: {width_pct}%;"></div><div class="load-bar-fill" style="width: {curr_pct}%; background-color: {color}; opacity: 0.8;"></div></div></div>"""
     
-    # Create Radar
-    fig_radar = go.Figure()
-    
-    # Target Trace (Background)
-    fig_radar.add_trace(go.Scatterpolar(
-        r=target_values,
-        theta=categories,
-        fill='toself',
-        name='Target Zone',
-        line=dict(color='rgba(200, 200, 200, 0.5)'),
-        fillcolor='rgba(200, 200, 200, 0.2)'
-    ))
-    
-    # Actual Trace
-    fig_radar.add_trace(go.Scatterpolar(
-        r=actual_values,
-        theta=categories,
-        fill='toself',
-        name='Current Load',
-        line=dict(color='#c2410c'), # Rust color
-        fillcolor='rgba(194, 65, 12, 0.4)'
-    ))
-    
-    fig_radar.update_layout(
-        polar=dict(
-            radialaxis=dict(visible=True, range=[0, max(max(actual_values), max(target_values)) * 1.1])
-        ),
-        showlegend=True,
-        height=350,
-        margin=dict(l=40, r=40, t=20, b=20)
-    )
-    
-    st.plotly_chart(fig_radar, use_container_width=True)
-    
+    st.markdown(draw_focus_bar("Anaerobic (Purple)", buckets['anaerobic'], targets['anaerobic']['min'], targets['anaerobic']['max'], "#8b5cf6"), unsafe_allow_html=True)
+    st.markdown(draw_focus_bar("High Aerobic (Orange)", buckets['high'], targets['high']['min'], targets['high']['max'], "#f97316"), unsafe_allow_html=True)
+    st.markdown(draw_focus_bar("Low Aerobic (Blue)", buckets['low'], targets['low']['min'], targets['low']['max'], "#3b82f6"), unsafe_allow_html=True)
+
     # --- Sparklines for RHR & HRV ---
     st.divider()
     st.subheader("Recovery Trends (7 Days)")
     
-    # Get last 7 days of health data
     health_logs = st.session_state.data['health_logs']
     df_health = pd.DataFrame(health_logs)
     if not df_health.empty:
         df_health['date_obj'] = pd.to_datetime(df_health['date'])
-        # Sort and take last 7
         df_7d = df_health.sort_values('date_obj').tail(7)
-        
         col_rhr, col_hrv = st.columns(2)
-        
         with col_rhr:
             fig_rhr = px.line(df_7d, x='date_obj', y='rhr', title="Resting HR", markers=True)
-            fig_rhr.update_traces(line_color='#be123c') # Red
+            fig_rhr.update_traces(line_color='#be123c') 
             fig_rhr.update_layout(height=200, margin=dict(l=20, r=20, t=30, b=20), xaxis_title=None, yaxis_title=None)
             st.plotly_chart(fig_rhr, use_container_width=True)
-            
         with col_hrv:
             fig_hrv = px.line(df_7d, x='date_obj', y='hrv', title="HRV", markers=True)
-            fig_hrv.update_traces(line_color='#65a30d') # Green
+            fig_hrv.update_traces(line_color='#65a30d') 
             fig_hrv.update_layout(height=200, margin=dict(l=20, r=20, t=30, b=20), xaxis_title=None, yaxis_title=None)
             st.plotly_chart(fig_hrv, use_container_width=True)
 
@@ -765,6 +737,8 @@ def render_cardio():
             def_hr = run_data['avgHr']
             def_cad = run_data.get('cadence', 0)
             def_pwr = run_data.get('power', 0)
+            def_elev = run_data.get('elevation', 0)
+            def_shoe = run_data.get('shoe_id', 'Default Shoe')
             def_notes = run_data.get('notes', '')
             def_feel = run_data.get('feel', 'Normal')
             def_rpe = run_data.get('rpe', 5)
@@ -809,6 +783,14 @@ def render_cardio():
             with c6:
                 st.caption("Power (w)")
                 power = st.number_input("Power", min_value=0, value=int(def_pwr), label_visibility="collapsed", key=f"pwr_{key_suffix}")
+            
+            c_g1, c_g2 = st.columns(2)
+            with c_g1:
+                st.caption("Elevation (m)")
+                elev = st.number_input("Elevation", min_value=0, value=int(def_elev), label_visibility="collapsed", key=f"elev_{key_suffix}")
+            with c_g2:
+                st.write("") # Spacer since shoes are removed
+
             st.caption("Heart Rate Zones (Time in mm:ss)")
             rc1, rc2, rc3, rc4, rc5 = st.columns(5)
             z1 = rc1.text_input("Zone 1", value=def_z1, placeholder="00:00", key=f"z1_{key_suffix}")
@@ -825,8 +807,13 @@ def render_cardio():
                 new_id = str(int(time.time()))
                 doc_id = str(edit_run_id) if edit_run_id else new_id
                 dist_save = dist if dist is not None else 0.0
+                
                 run_obj = {
-                    "id": doc_id, "date": str(act_date), "type": act_type, "distance": dist_save, "duration": parse_time_input(dur_str), "avgHr": hr, "rpe": rpe, "feel": feel, "cadence": cadence, "power": power, "z1": parse_time_input(z1), "z2": parse_time_input(z2), "z3": parse_time_input(z3), "z4": parse_time_input(z4), "z5": parse_time_input(z5), "notes": notes
+                    "id": doc_id, "date": str(act_date), "type": act_type, "distance": dist_save, 
+                    "duration": parse_time_input(dur_str), "avgHr": hr, "rpe": rpe, "feel": feel, 
+                    "cadence": cadence, "power": power, "elevation": elev, "shoe_id": "default",
+                    "z1": parse_time_input(z1), "z2": parse_time_input(z2), "z3": parse_time_input(z3), 
+                    "z4": parse_time_input(z4), "z5": parse_time_input(z5), "notes": notes
                 }
                 if db: db.collection("runs").document(doc_id).set(run_obj)
                 if edit_run_id:
@@ -919,6 +906,9 @@ def render_cardio():
                     zones = [float(row.get(f'z{i}', 0)) for i in range(1,6)]
                     trimp, focus = engine.calculate_trimp(float(row['duration']), int(row['avgHr']), zones)
                     te, te_label = engine.get_training_effect(trimp)
+                    
+                    elev = row.get('elevation', 0)
+                    
                     with st.container(border=True):
                         c_date, c_type, c_stats, c_metrics, c_act = st.columns([1.5, 1.2, 2.5, 2.5, 1])
                         icon_map = {"Run": ":material/directions_run:", "Walk": ":material/directions_walk:", "Ultimate": ":material/sports_handball:"}
@@ -934,9 +924,15 @@ def render_cardio():
                         extras = []
                         if row.get('cadence', 0) > 0: extras.append(f"Cad: {row['cadence']}")
                         if row.get('power', 0) > 0: extras.append(f"Pwr: {row['power']}")
+                        if elev > 0: extras.append(f"Elev: {elev}m") # Elevation
                         if extras: metrics_list.append(f"<span class='history-sub'>{' | '.join(extras)}</span>")
+                        
+                        # Feel
                         feel_val = row.get('feel', '')
-                        if feel_val: metrics_list.append(f"<span class='history-sub'>Feel:</span> <span class='history-value'>{feel_val}</span>")
+                        bottom_line = []
+                        if feel_val: bottom_line.append(f"Feel: {feel_val}")
+                        if bottom_line: metrics_list.append(f"<span class='history-sub'>{' | '.join(bottom_line)}</span>")
+                        
                         metrics_html = "<div style='line-height: 1.5;'>" + "<br>".join(metrics_list) + "</div>"
                         c_metrics.markdown(metrics_html, unsafe_allow_html=True)
                         with c_act:
