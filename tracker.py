@@ -411,10 +411,7 @@ def generate_report(start_date, end_date, options):
     
     engine = PhysiologyEngine(st.session_state.data['user_profile'])
     
-    field_types = []
-    if options.get('run'): field_types.append('Run')
-    if options.get('walk'): field_types.append('Walk')
-    if options.get('ultimate'): field_types.append('Ultimate')
+    field_types = [t for t in ["Run", "Walk", "Ultimate"] if t in selected_cats]
     
     if field_types:
         runs = st.session_state.data['runs']
@@ -430,6 +427,8 @@ def generate_report(start_date, end_date, options):
             for r in period_runs:
                 zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
                 trimp, focus = engine.calculate_trimp(float(r['duration']), int(r.get('avgHr', 0)), zones)
+                # Find dominant focus type
+                focus_type = max(focus, key=focus.get) if focus else "low"
                 te, te_label = engine.get_training_effect(trimp)
                 line = f"- {r['date'][5:]}: {r['type']} {r['distance']}km @ {format_duration(r['duration'])}"
                 metrics = []
@@ -438,32 +437,38 @@ def generate_report(start_date, end_date, options):
                 line += f" ({', '.join(metrics)})" if metrics else ""
                 report.append(line)
                 
-                # Find dominant focus for summary
-                focus_type = max(focus, key=focus.get) if focus else "low"
-                physio_info = f"   Load: {int(trimp)} ({focus_type.title()}) | TE: {te} {te_label}"
-                
-                if r.get('rpe'): physio_info += f" | RPE: {r['rpe']}"
-                report.append(physio_info)
-                
-                # Add Details if enabled
+                # Details based on checkboxes
+                details = []
+                if options.get('det_physio'):
+                    details.append(f"Load: {int(trimp)} ({focus_type.title()}) | TE: {te} {te_label}")
+                    
                 if options.get('det_adv'):
                     adv = []
                     if r.get('cadence'): adv.append(f"Cad: {r['cadence']}")
                     if r.get('power'): adv.append(f"Pwr: {r['power']}")
                     if r.get('elevation'): adv.append(f"Elev: {r['elevation']}m")
-                    if adv: report.append(f"   Adv: {' | '.join(adv)}")
+                    if adv: details.append(" | ".join(adv))
                 
                 if options.get('det_zones'):
                     z_strs = []
                     for i in range(1,6):
                         val = float(r.get(f'z{i}', 0))
                         if val > 0: z_strs.append(f"Z{i}: {format_duration(val)}")
-                    if z_strs: report.append(f"   Zones: {' | '.join(z_strs)}")
-
-                if options.get('det_notes') and r.get('notes'): report.append(f"   Note: {r['notes']}")
+                    if z_strs: details.append(" | ".join(z_strs))
+                
+                if options.get('det_notes'):
+                    notes_parts = []
+                    if r.get('rpe'): notes_parts.append(f"RPE: {r['rpe']}")
+                    if r.get('feel'): notes_parts.append(f"Feel: {r['feel']}")
+                    if r.get('notes'): notes_parts.append(f"Note: {r['notes']}")
+                    if notes_parts: details.append(" | ".join(notes_parts))
+                
+                if details:
+                    for d in details:
+                        report.append(f"   {d}")
             report.append("")
 
-    if options.get('health'):
+    if "Stats" in selected_cats:
         stats = st.session_state.data['health_logs']
         period_stats = [s for s in stats if start_date <= datetime.strptime(s['date'], '%Y-%m-%d').date() <= end_date]
         period_stats.sort(key=lambda x: x['date'])
@@ -473,7 +478,7 @@ def generate_report(start_date, end_date, options):
                 date_str = s['date'][5:]
                 sleep_str = format_sleep(s.get('sleepHours', 0))
                 daily_target = engine.get_daily_target(s.get('rhr', 0), s.get('hrv'), s.get('sleepHours', 0))
-                report.append(f"- {date_str}: Sleep: {sleep_str} | RHR {s.get('rhr')} | Readiness: {daily_target['readiness']}")
+                report.append(f"- {date_str}: Sleep: {sleep_str} | RHR {s.get('rhr')} | HRV {s.get('hrv')} | {daily_target['readiness']}")
     
     # --- Status Snapshot at End of Report Period ---
     if options.get('status'):
@@ -491,7 +496,7 @@ def generate_report(start_date, end_date, options):
         report.append(f"ACWR: {status['ratio']} (Acute: {status['acute']} / Chronic: {status['chronic']})")
         buckets = status['buckets']
         report.append(f"Focus: Low: {int(buckets['low'])} | High: {int(buckets['high'])} | Anaerobic: {int(buckets['anaerobic'])}")
-    
+
     return "\n".join(report)
 
 # --- Sidebar Navigation ---
@@ -657,6 +662,37 @@ def render_training_status():
     c1, c2 = st.columns(2)
     with c1: st.metric("Acute Load (7d)", int(status_data['acute']))
     with c2: st.metric("Chronic Load (28d)", int(status_data['chronic']))
+    
+    # --- Graph: Green Tunnel (Chronic Load vs Acute Load) ---
+    history_df = pd.DataFrame(status_data['history'])
+    if not history_df.empty:
+        fig_tunnel = go.Figure()
+        fig_tunnel.add_trace(go.Scatter(
+            x=history_df['date'], y=history_df['optimal_max'],
+            mode='lines', line=dict(width=0), showlegend=False, hoverinfo='skip'
+        ))
+        fig_tunnel.add_trace(go.Scatter(
+            x=history_df['date'], y=history_df['optimal_min'],
+            mode='lines', line=dict(width=0), fill='tonexty', 
+            fillcolor='rgba(34, 197, 94, 0.2)', # Green with opacity
+            name='Optimal Band'
+        ))
+        fig_tunnel.add_trace(go.Scatter(
+            x=history_df['date'], y=history_df['acute'],
+            mode='lines+markers', line=dict(color='#0f172a', width=3),
+            name='Acute Load'
+        ))
+        fig_tunnel.update_layout(
+            title="Training Load (Chronic vs Acute)",
+            xaxis_title="", yaxis_title="Load",
+            margin=dict(l=20, r=20, t=40, b=20),
+            height=300,
+            showlegend=True,
+            plot_bgcolor='white',
+            hovermode="x unified"
+        )
+        st.plotly_chart(fig_tunnel, use_container_width=True)
+
     st.divider()
     st.subheader("Load Focus (4 weeks)")
     buckets = status_data['buckets']
@@ -1041,7 +1077,7 @@ def render_share():
                 'health': opt_health, 'status': opt_status,
                 'det_physio': det_physio, 'det_adv': det_adv, 'det_zones': det_zones, 'det_notes': det_notes
             }
-            report_text = generate_report(start_r, end_r, options)
+            report_text = generate_report(start_r, end_r, selected_cats) # Pass selected_cats as expected by the func
             st.text_area("Copy this text:", value=report_text, height=500)
 
 # --- Main App Logic ---
