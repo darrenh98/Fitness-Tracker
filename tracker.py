@@ -384,115 +384,81 @@ class PhysiologyEngine:
 
 # --- Report Generation ---
 def generate_report(start_date, end_date, options):
-    report = []
+    report = [f"Training & Physio Report"]
+    report.append(f"{start_date.strftime('%b %d')} - {end_date.strftime('%b %d')}\n")
     
-    # 1. Summary Header
     engine = PhysiologyEngine(st.session_state.data['user_profile'])
-    runs = st.session_state.data['runs']
-    stats = st.session_state.data['health_logs']
     
-    # Filter Data
-    field_types = []
-    if options.get('run'): field_types.append('Run')
-    if options.get('walk'): field_types.append('Walk')
-    if options.get('ultimate'): field_types.append('Ultimate')
+    field_types = [t for t in ["Run", "Walk", "Ultimate"] if t in selected_cats]
     
-    period_runs = [r for r in runs if start_date <= datetime.strptime(r['date'], '%Y-%m-%d').date() <= end_date and r['type'] in field_types]
-    period_stats = [s for s in stats if start_date <= datetime.strptime(s['date'], '%Y-%m-%d').date() <= end_date]
-    
-    # Calc Averages
-    total_dist = sum(r['distance'] for r in period_runs) if period_runs else 0
-    total_time = sum(r['duration'] for r in period_runs) if period_runs else 0
-    avg_rhr = sum(s.get('rhr', 0) for s in period_stats) / len(period_stats) if period_stats else 0
-    avg_hrv = sum(s.get('hrv', 0) for s in period_stats) / len(period_stats) if period_stats else 0
-    avg_sleep = sum(s.get('sleepHours', 0) for s in period_stats) / len(period_stats) if period_stats else 0
-    
-    report.append(f"WEEKLY REPORT ({start_date.strftime('%b %d')} - {end_date.strftime('%b %d')})")
-    report.append("-" * 40)
-    report.append(f"Total Dist: {total_dist:.1f} km")
-    report.append(f"Total Time: {format_duration(total_time)}")
-    if avg_rhr: report.append(f"Avg RHR: {int(avg_rhr)} bpm")
-    if avg_hrv: report.append(f"Avg HRV: {int(avg_hr)} ms")
-    if avg_sleep: report.append(f"Avg Sleep: {format_sleep(avg_sleep)}")
-    report.append("-" * 40)
-    report.append("")
-    
-    # 2. RUNS / CARDIO
-    if field_types and period_runs:
-        report.append(f"ACTIVITIES ({len(period_runs)})")
+    if field_types:
+        runs = st.session_state.data['runs']
+        period_runs = [r for r in runs if start_date <= datetime.strptime(r['date'], '%Y-%m-%d').date() <= end_date and r['type'] in field_types]
         period_runs.sort(key=lambda x: x['date'])
         
-        for r in period_runs:
-            zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
-            trimp, focus = engine.calculate_trimp(float(r['duration']), int(r['avgHr']), zones)
-            dom_focus = max(focus, key=focus.get) if focus else "low"
-            te, te_label = engine.get_training_effect(trimp)
-            
-            line = f"- {r['date'][5:]}: {r['type']} {r['distance']}km @ {format_duration(r['duration'])}"
-            metrics = []
-            if r['distance'] > 0 and r['type'] != 'Ultimate': metrics.append(f"{format_pace(r['duration']/r['distance'])}/km")
-            if r['avgHr'] > 0: metrics.append(f"{r['avgHr']}bpm")
-            if metrics: line += f" ({', '.join(metrics)})"
-            report.append(line)
-            
-            # Details
-            details = []
-            if options.get('det_physio'):
-                details.append(f"Load: {int(trimp)} ({dom_focus.title()}) | TE: {te}")
+        if period_runs:
+            total_dist = sum(r['distance'] for r in period_runs)
+            total_time = sum(r['duration'] for r in period_runs)
+            report.append(f"ACTIVITIES ({len(period_runs)})")
+            report.append(f"Totals: {total_dist:.1f} km | {format_duration(total_time)}")
+            report.append("")
+            for r in period_runs:
+                zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
+                trimp, focus = engine.calculate_trimp(float(r['duration']), int(r['avgHr']), zones)
+                # Find dominant focus type
+                focus_type = max(focus, key=focus.get) if focus else "low"
+                te, te_label = engine.get_training_effect(trimp)
                 
-            if options.get('det_adv'):
-                adv = []
-                if r.get('cadence'): adv.append(f"Cad: {r['cadence']}")
-                if r.get('power'): adv.append(f"Pwr: {r['power']}")
-                if r.get('elevation'): adv.append(f"Elev: {r['elevation']}m")
-                if adv: details.append(" | ".join(adv))
-            
-            if options.get('det_zones'):
-                z_strs = []
-                for i in range(1,6):
-                    val = float(r.get(f'z{i}', 0))
-                    if val > 0: z_strs.append(f"Z{i}: {format_duration(val)}")
-                if z_strs: details.append(" | ".join(z_strs))
-            
-            if options.get('det_notes'):
-                notes_parts = []
-                if r.get('rpe'): notes_parts.append(f"RPE: {r['rpe']}")
-                if r.get('feel'): notes_parts.append(f"Feel: {r['feel']}")
-                if r.get('notes'): notes_parts.append(f"Note: {r['notes']}")
-                if notes_parts: details.append(" | ".join(notes_parts))
-            
-            if details:
-                for d in details:
-                    report.append(f"   {d}")
-        report.append("")
-
-    # 3. HEALTH
-    if options.get('health') and period_stats:
-        report.append(f"HEALTH LOG")
+                line = f"- {r['date'][5:]}: {r['type']} {r['distance']}km @ {format_duration(r['duration'])}"
+                
+                # Metrics Line
+                metrics = []
+                if r['distance'] > 0 and r['type'] != 'Ultimate': metrics.append(f"{format_pace(r['duration']/r['distance'])}/km")
+                if r['avgHr'] > 0: metrics.append(f"{r['avgHr']}bpm")
+                
+                line += f" ({', '.join(metrics)})" if metrics else ""
+                
+                report.append(line)
+                
+                # Physio & Feel
+                physio_info = f"   Load: {int(trimp)} ({focus_type.title()}) | TE: {te} {te_label}"
+                if r.get('rpe'): physio_info += f" | RPE: {r['rpe']}"
+                report.append(physio_info)
+                
+                # Notes
+                if r.get('notes'): report.append(f"   Note: {r['notes']}")
+            report.append("")
+    
+    if "Stats" in selected_cats:
+        stats = st.session_state.data['health_logs']
+        period_stats = [s for s in stats if start_date <= datetime.strptime(s['date'], '%Y-%m-%d').date() <= end_date]
         period_stats.sort(key=lambda x: x['date'])
-        for s in period_stats:
-            date_str = s['date'][5:]
-            sleep_str = format_sleep(s.get('sleepHours', 0))
-            daily_target = engine.get_daily_target(s.get('rhr', 0), s.get('hrv'), s.get('sleepHours', 0))
-            report.append(f"- {date_str}: Sleep: {sleep_str} | RHR {s.get('rhr')} | HRV {s.get('hrv')} | {daily_target['readiness']}")
-        report.append("")
-
-    # 4. STATUS
-    if options.get('status'):
-        # Calc status at end date
-        all_runs = st.session_state.data['runs']
-        h_data = []
-        for r in all_runs:
-            zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
-            trimp, focus = engine.calculate_trimp(float(r['duration']), int(r['avgHr']), zones)
-            h_data.append({'date': r['date'], 'load': trimp, 'focus': focus})
-            
-        status = engine.calculate_training_status(h_data, reference_date=end_date)
-        report.append(f"STATUS (As of {end_date})")
-        report.append(f"State: {status['status']}")
-        report.append(f"ACWR: {status['ratio']} (Acute {status['acute']} / Chronic {status['chronic']})")
-        b = status['buckets']
-        report.append(f"Focus: Low {int(b['low'])} | High {int(b['high'])} | Anaerobic {int(b['anaerobic'])}")
+        if period_stats:
+            report.append(f"HEALTH LOG")
+            for s in period_stats:
+                date_str = s['date'][5:]
+                sleep_str = format_sleep(s.get('sleepHours', 0))
+                daily_target = engine.get_daily_target(s.get('rhr', 0), s.get('hrv'), s.get('sleepHours', 0))
+                report.append(f"- {date_str}: Sleep: {sleep_str} | RHR {s.get('rhr')} | Readiness: {daily_target['readiness']}")
+            report.append("")
+    
+    # --- Status Snapshot at End of Report Period ---
+    all_runs = st.session_state.data['runs']
+    history_data = []
+    for r in all_runs:
+        zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
+        trimp, focus = engine.calculate_trimp(float(r['duration']), int(r['avgHr']), zones)
+        history_data.append({'date': r['date'], 'load': trimp, 'focus': focus})
+    
+    # Calculate status relative to the end date of the report
+    status = engine.calculate_training_status(history_data, reference_date=end_date)
+    
+    report.append("")
+    report.append(f"STATUS (As of {end_date})")
+    report.append(f"Status: {status['status']}")
+    report.append(f"ACWR: {status['ratio']} (Acute: {status['acute']} / Chronic: {status['chronic']})")
+    buckets = status['buckets']
+    report.append(f"Focus: Low: {int(buckets['low'])} | High: {int(buckets['high'])} | Anaerobic: {int(buckets['anaerobic'])}")
 
     return "\n".join(report)
 
@@ -693,8 +659,6 @@ def render_cardio():
     def_dist, def_dur, def_hr, def_cad, def_pwr, def_elev = 0.0, 0.0, 0, 0, 0, 0
     def_notes, def_feel, def_rpe = "", "Normal", 5
     def_z1, def_z2, def_z3, def_z4, def_z5 = "", "", "", "", ""
-    def_shoe = "Default Shoe"
-    
     if edit_run_id:
         run_data = next((r for r in st.session_state.data['runs'] if str(r['id']) == str(edit_run_id)), None)
         if run_data:
@@ -1011,13 +975,19 @@ def render_share():
         st.divider()
         
         if st.button("📄 Generate Text Report", type="primary"):
+            selected_cats = []
+            if opt_run: selected_cats.append("Run")
+            if opt_walk: selected_cats.append("Walk")
+            if opt_ult: selected_cats.append("Ultimate")
+            if opt_health: selected_cats.append("Stats")
+            
             options = {
                 'run': opt_run, 'walk': opt_walk, 'ultimate': opt_ult,
                 'health': opt_health, 'status': opt_status,
                 'det_physio': det_physio, 'det_adv': det_adv, 'det_zones': det_zones, 'det_notes': det_notes
             }
-            report_text = generate_report(start_r, end_r, options)
-            st.code(report_text, language="markdown") # Using st.code for better copy functionality
+            report_text = generate_report(start_r, end_r, selected_cats) # Pass selected_cats as expected by the func
+            st.text_area("Copy this text:", value=report_text, height=500)
 
 # --- Main App Logic ---
 def main():
