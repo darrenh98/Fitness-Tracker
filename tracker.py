@@ -9,6 +9,7 @@ import time
 import copy
 import re
 import math
+import calendar # Added for calendar generation
 import streamlit.components.v1 as components
 
 # --- Firebase Init ---
@@ -411,73 +412,59 @@ def generate_report(start_date, end_date, options):
     
     engine = PhysiologyEngine(st.session_state.data['user_profile'])
     
-    # 1. RUNS / CARDIO
     field_types = []
     if options.get('run'): field_types.append('Run')
     if options.get('walk'): field_types.append('Walk')
     if options.get('ultimate'): field_types.append('Ultimate')
-
+    
     if field_types:
-        report.append(f"CARDIO SESSIONS")
         runs = st.session_state.data['runs']
-        
         period_runs = [r for r in runs if start_date <= datetime.strptime(r['date'], '%Y-%m-%d').date() <= end_date and r['type'] in field_types]
         period_runs.sort(key=lambda x: x['date'])
         
-        if not period_runs:
-            report.append("No activities in range.")
-        else:
+        if period_runs:
             total_dist = sum(r['distance'] for r in period_runs)
             total_time = sum(r['duration'] for r in period_runs)
+            report.append(f"ACTIVITIES ({len(period_runs)})")
             report.append(f"Totals: {total_dist:.1f} km | {format_duration(total_time)}")
             report.append("")
-            
             for r in period_runs:
+                zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
+                trimp, focus = engine.calculate_trimp(float(r['duration']), int(r.get('avgHr', 0)), zones)
+                te, te_label = engine.get_training_effect(trimp)
                 line = f"- {r['date'][5:]}: {r['type']} {r['distance']}km @ {format_duration(r['duration'])}"
                 metrics = []
                 if r['distance'] > 0 and r['type'] != 'Ultimate': metrics.append(f"{format_pace(r['duration']/r['distance'])}/km")
                 if r.get('avgHr') and r['avgHr'] > 0: metrics.append(f"{r['avgHr']}bpm")
-                if metrics: line += f" ({', '.join(metrics)})"
+                line += f" ({', '.join(metrics)})" if metrics else ""
                 report.append(line)
                 
-                # Details
-                details = []
-                zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
-                trimp, focus = engine.calculate_trimp(float(r['duration']), int(r.get('avgHr', 0)), zones)
-                dom_focus = max(focus, key=focus.get) if focus else "low"
-                te, te_lbl = engine.get_training_effect(trimp)
-
-                if options.get('det_physio'):
-                    details.append(f"Load: {int(trimp)} ({dom_focus.title()}) | TE: {te} {te_lbl}")
-                    
+                # Find dominant focus for summary
+                focus_type = max(focus, key=focus.get) if focus else "low"
+                physio_info = f"   Load: {int(trimp)} ({focus_type.title()}) | TE: {te} {te_label}"
+                
+                if r.get('rpe'): physio_info += f" | RPE: {r['rpe']}"
+                report.append(physio_info)
+                
+                # Details based on checkboxes
                 if options.get('det_adv'):
                     adv = []
                     if r.get('cadence'): adv.append(f"Cad: {r['cadence']}")
                     if r.get('power'): adv.append(f"Pwr: {r['power']}")
                     if r.get('elevation'): adv.append(f"Elev: {r['elevation']}m")
-                    if adv: details.append(" | ".join(adv))
+                    if adv: report.append(f"   Adv: {' | '.join(adv)}")
                 
                 if options.get('det_zones'):
                     z_strs = []
                     for i in range(1,6):
                         val = float(r.get(f'z{i}', 0))
                         if val > 0: z_strs.append(f"Z{i}: {format_duration(val)}")
-                    if z_strs: details.append(" | ".join(z_strs))
-                
-                if options.get('det_notes'):
-                    notes_parts = []
-                    if r.get('rpe'): notes_parts.append(f"RPE: {r['rpe']}")
-                    if r.get('feel'): notes_parts.append(f"Feel: {r['feel']}")
-                    if r.get('notes'): notes_parts.append(f"Note: {r['notes']}")
-                    if notes_parts: details.append(" | ".join(notes_parts))
-                
-                if details:
-                    for d in details:
-                        report.append(f"   {d}")
+                    if z_strs: report.append(f"   Zones: {' | '.join(z_strs)}")
+
+                if options.get('det_notes') and r.get('notes'): report.append(f"   Note: {r['notes']}")
             report.append("")
 
-    # 2. HEALTH
-    if options.get('health'):
+    if "Stats" in selected_cats:
         stats = st.session_state.data['health_logs']
         period_stats = [s for s in stats if start_date <= datetime.strptime(s['date'], '%Y-%m-%d').date() <= end_date]
         period_stats.sort(key=lambda x: x['date'])
@@ -487,10 +474,9 @@ def generate_report(start_date, end_date, options):
                 date_str = s['date'][5:]
                 sleep_str = format_sleep(s.get('sleepHours', 0))
                 daily_target = engine.get_daily_target(s.get('rhr', 0), s.get('hrv'), s.get('sleepHours', 0))
-                report.append(f"- {date_str}: Sleep: {sleep_str} | RHR {s.get('rhr')} | HRV {s.get('hrv', '-')} | {daily_target['readiness']}")
-            report.append("")
-
-    # 3. STATUS
+                report.append(f"- {date_str}: Sleep: {sleep_str} | RHR {s.get('rhr')} | Readiness: {daily_target['readiness']}")
+    
+    # --- Status Snapshot at End of Report Period ---
     if options.get('status'):
         all_runs = st.session_state.data['runs']
         h_data = []
@@ -498,13 +484,14 @@ def generate_report(start_date, end_date, options):
             zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
             trimp, focus = engine.calculate_trimp(float(r['duration']), int(r.get('avgHr', 0)), zones)
             h_data.append({'date': r['date'], 'load': trimp, 'focus': focus})
-            
+        
         status = engine.calculate_training_status(h_data, reference_date=end_date)
+        report.append("")
         report.append(f"STATUS (As of {end_date})")
         report.append(f"State: {status['status']}")
-        report.append(f"ACWR: {status['ratio']} (Acute {status['acute']} / Chronic {status['chronic']})")
-        b = status['buckets']
-        report.append(f"Focus: Low {int(b['low'])} | High {int(b['high'])} | Anaerobic {int(b['anaerobic'])}")
+        report.append(f"ACWR: {status['ratio']} (Acute: {status['acute']} / Chronic: {status['chronic']})")
+        buckets = status['buckets']
+        report.append(f"Focus: Low: {int(buckets['low'])} | High: {int(buckets['high'])} | Anaerobic: {int(buckets['anaerobic'])}")
 
     return "\n".join(report)
 
@@ -708,7 +695,6 @@ def render_training_status():
     targets = status_data['targets']
     total_4w = status_data['total_4w']
     max_scale = max(targets['low']['max'], buckets['low'], 1) * 1.2
-    
     def draw_focus_bar(label, current, t_min, t_max, color):
         curr_pct = min((current / max_scale) * 100, 100)
         min_pct = min((t_min / max_scale) * 100, 100)
@@ -718,7 +704,6 @@ def render_training_status():
         elif current > t_max: status_txt = "Over-focus"
         else: status_txt = "Balanced"
         return f"""<div style="margin-bottom: 12px;"><div class="load-label"><span>{label}</span> <span>{int(current)} <span style="font-weight:400; font-size:0.7rem;">({status_txt})</span></span></div><div class="load-bar-container"><div class="load-bar-target" style="left: {min_pct}%; width: {width_pct}%;"></div><div class="load-bar-fill" style="width: {curr_pct}%; background-color: {color}; opacity: 0.8;"></div></div></div>"""
-    
     st.markdown(draw_focus_bar("Anaerobic (Purple)", buckets['anaerobic'], targets['anaerobic']['min'], targets['anaerobic']['max'], "#8b5cf6"), unsafe_allow_html=True)
     st.markdown(draw_focus_bar("High Aerobic (Orange)", buckets['high'], targets['high']['min'], targets['high']['max'], "#f97316"), unsafe_allow_html=True)
     st.markdown(draw_focus_bar("Low Aerobic (Blue)", buckets['low'], targets['low']['min'], targets['low']['max'], "#3b82f6"), unsafe_allow_html=True)
@@ -986,46 +971,98 @@ def render_cardio():
             else: st.info("No activities found for this category.")
 
 def render_trends():
-    st.header(":material/trending_up: Progress & Trends")
-    runs_df = pd.DataFrame(st.session_state.data['runs'])
-    if runs_df.empty: st.info("Log some activities to see trends!")
-    else:
-        runs_df['date'] = pd.to_datetime(runs_df['date'])
-        runs_df['pace'] = runs_df.apply(lambda x: x['duration'] / x['distance'] if x['distance'] > 0 else 0, axis=1)
-        with st.container(border=True):
-            st.subheader("Period Comparison")
-            comp_mode = st.selectbox("Compare", ["Week vs Last Week", "Month vs Last Month", "6 Months", "Year vs Last Year"], label_visibility="collapsed")
-            today = datetime.now()
-            if comp_mode == "Week vs Last Week": days = 7
-            elif comp_mode == "Month vs Last Month": days = 30
-            elif comp_mode == "6 Months": days = 180
-            else: days = 365
-            curr_start = today - timedelta(days=days)
-            prev_start = curr_start - timedelta(days=days)
-            curr_df = runs_df[(runs_df['date'] >= curr_start) & (runs_df['date'] <= today)]
-            prev_df = runs_df[(runs_df['date'] >= prev_start) & (runs_df['date'] < curr_start)]
-            def calc_delta(curr, prev):
-                if prev == 0: return 0.0
-                return ((curr - prev) / prev) * 100
-            c_dist = curr_df['distance'].sum(); p_dist = prev_df['distance'].sum(); d_dist = calc_delta(c_dist, p_dist)
-            c_time = curr_df['duration'].sum(); p_time = prev_df['duration'].sum(); d_time = calc_delta(c_time, p_time)
-            c_pace = c_time / c_dist if c_dist > 0 else 0; p_pace = p_time / p_dist if p_dist > 0 else 0; d_pace = calc_delta(c_pace, p_pace)
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Distance", f"{c_dist:.1f} km", f"{d_dist:.1f}%")
-            m2.metric("Time", f"{int(c_time//60)}h {int(c_time%60)}m", f"{d_time:.1f}%")
-            m3.metric("Avg Pace", format_pace(c_pace) + "/km", f"{d_pace:.1f}%", delta_color="inverse")
-        st.subheader("Trends Visualized")
-        tab_vol, tab_pace = st.tabs(["Volume", "Pace Efficiency"])
-        with tab_vol:
-            vol_df = runs_df.set_index('date').resample('W').agg({'distance': 'sum'}).reset_index()
-            fig_vol = px.bar(vol_df, x='date', y='distance', title="Weekly Distance Volume")
-            fig_vol.update_layout(xaxis_title="", yaxis_title="Km", showlegend=False)
-            st.plotly_chart(fig_vol, use_container_width=True)
-        with tab_pace:
-            pace_df = runs_df[runs_df['distance'] > 0].copy()
-            fig_pace = px.scatter(pace_df, x='date', y='pace', color='type', title="Pace Evolution", trendline="lowess")
-            fig_pace.update_layout(xaxis_title="", yaxis_title="Pace (min/km)")
-            st.plotly_chart(fig_pace, use_container_width=True)
+    st.header(":material/calendar_today: Activity Calendar")
+    
+    # Session State for Month Navigation
+    if 'cal_date' not in st.session_state:
+        st.session_state.cal_date = get_malaysia_time().date().replace(day=1)
+
+    # Navigation UI
+    c_prev, c_curr, c_next = st.columns([1, 4, 1])
+    if c_prev.button("◀ Prev", use_container_width=True):
+        prev_month = st.session_state.cal_date.replace(day=1) - timedelta(days=1)
+        st.session_state.cal_date = prev_month.replace(day=1)
+        st.rerun()
+        
+    c_curr.markdown(f"<h3 style='text-align: center; margin:0;'>{st.session_state.cal_date.strftime('%B %Y')}</h3>", unsafe_allow_html=True)
+    
+    if c_next.button("Next ▶", use_container_width=True):
+        next_month = (st.session_state.cal_date.replace(day=28) + timedelta(days=4)).replace(day=1)
+        st.session_state.cal_date = next_month
+        st.rerun()
+
+    # Data Prep
+    year = st.session_state.cal_date.year
+    month = st.session_state.cal_date.month
+    
+    runs = st.session_state.data['runs']
+    runs_df = pd.DataFrame(runs)
+    if not runs_df.empty:
+        runs_df['date_dt'] = pd.to_datetime(runs_df['date']).dt.date
+    
+    # Calendar Generation
+    cal = calendar.monthcalendar(year, month)
+    
+    # Headers
+    cols = st.columns([1]*7 + [1.5]) # 7 Days + 1 Summary
+    days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+    for i, d in enumerate(days):
+        cols[i].markdown(f"<div style='text-align:center; font-weight:bold; color:#78716c'>{d}</div>", unsafe_allow_html=True)
+    cols[7].markdown(f"<div style='text-align:center; font-weight:bold; color:#c2410c'>Weekly Stats</div>", unsafe_allow_html=True)
+    
+    st.divider()
+
+    # Render Weeks
+    for week in cal:
+        cols = st.columns([1]*7 + [1.5])
+        
+        w_dist = 0
+        w_time = 0
+        w_elev = 0
+        w_count = 0
+        
+        for i, day in enumerate(week):
+            with cols[i]:
+                if day == 0:
+                    st.markdown("")
+                    continue
+                
+                # Check for runs
+                current_date = date(year, month, day)
+                day_runs = []
+                if not runs_df.empty:
+                    day_runs = runs_df[runs_df['date_dt'] == current_date]
+                
+                # Render Day Cell
+                with st.container(border=True):
+                    # Highlight today
+                    if current_date == get_malaysia_time().date():
+                        st.markdown(f"<div style='color:#c2410c; font-weight:bold;'>{day}</div>", unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"<div style='color:#a8a29e; font-size:0.8em;'>{day}</div>", unsafe_allow_html=True)
+                    
+                    if not day_runs.empty:
+                        for _, r in day_runs.iterrows():
+                            # Minimal display: Icon + Dist
+                            icon = "🏃" if r['type'] == "Run" else "🚶" if r['type'] == "Walk" else "🥏"
+                            st.caption(f"{icon} {r['distance']}k")
+                            
+                            # Add to totals
+                            w_dist += r['distance']
+                            w_time += r['duration']
+                            w_elev += r.get('elevation', 0)
+                            w_count += 1
+        
+        # Render Summary Column
+        with cols[7]:
+            if w_count > 0:
+                with st.container(border=True):
+                    st.markdown(f"**Total: {w_dist:.1f} km**")
+                    st.caption(f"Time: {format_duration(w_time)}")
+                    if w_elev > 0: st.caption(f"Elev: {w_elev}m")
+                    st.caption(f"{w_count} Activities")
+            else:
+                st.write("")
 
 def render_share():
     st.header(":material/share: Export Data")
