@@ -92,7 +92,9 @@ def setup_page():
         [data-testid="stFormSubmitButton"] button { background-color: #c2410c; color: white; padding: 0.6rem 1.2rem; width: 100%; border: none; }
         [data-testid="stFormSubmitButton"] button:hover { background-color: #9a3412; }
         .streamlit-expanderHeader { font-weight: 600; color: #44403c; border-radius: 8px; background-color: #ffffff; }
-        [data-testid="stRadio"] > div { flex-direction: row; gap: 10px; flex-wrap: wrap; }
+        
+        /* --- Removed Horizontal Radio CSS to fix sidebar jumping --- */
+        
         @media only screen and (max-width: 600px) { .stCard, [data-testid="stForm"] { padding: 1rem; } [data-testid="stMetricValue"] { font-size: 1.4rem; } [data-testid="stVerticalBlock"] > [style*="flex-direction: column;"] > [data-testid="stVerticalBlock"] > [data-testid="stContainer"] { padding: 0.75rem; } }
         
         /* Custom Components */
@@ -113,6 +115,22 @@ def setup_page():
         
         .bio-row { display: flex; justify-content: space-between; font-size: 0.85rem; color: #57534e; border-top: 1px solid #f5f5f4; padding-top: 8px; margin-top: 8px; }
         .bio-item { display: flex; align-items: center; gap: 4px; }
+        
+        /* Calendar Styles */
+        .cal-day-box {
+            min-height: 80px; 
+            display: flex; 
+            flex-direction: column; 
+            justify-content: flex-start;
+        }
+        .cal-activity {
+            font-size: 0.8rem;
+            color: #44403c;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            margin-top: 2px;
+        }
     </style>
     """, unsafe_allow_html=True)
 
@@ -412,6 +430,7 @@ def generate_report(start_date, end_date, options):
     
     engine = PhysiologyEngine(st.session_state.data['user_profile'])
     
+    # 1. RUNS / CARDIO
     field_types = []
     if options.get('run'): field_types.append('Run')
     if options.get('walk'): field_types.append('Walk')
@@ -431,37 +450,47 @@ def generate_report(start_date, end_date, options):
             for r in period_runs:
                 zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
                 trimp, focus = engine.calculate_trimp(float(r['duration']), int(r.get('avgHr', 0)), zones)
+                # Find dominant focus type
+                focus_type = max(focus, key=focus.get) if focus else "low"
                 te, te_label = engine.get_training_effect(trimp)
+                
                 line = f"- {r['date'][5:]}: {r['type']} {r['distance']}km @ {format_duration(r['duration'])}"
+                
                 metrics = []
                 if r['distance'] > 0 and r['type'] != 'Ultimate': metrics.append(f"{format_pace(r['duration']/r['distance'])}/km")
                 if r.get('avgHr') and r['avgHr'] > 0: metrics.append(f"{r['avgHr']}bpm")
                 line += f" ({', '.join(metrics)})" if metrics else ""
                 report.append(line)
                 
-                # Find dominant focus for summary
-                focus_type = max(focus, key=focus.get) if focus else "low"
-                physio_info = f"   Load: {int(trimp)} ({focus_type.title()}) | TE: {te} {te_label}"
-                
-                if r.get('rpe'): physio_info += f" | RPE: {r['rpe']}"
-                report.append(physio_info)
-                
-                # Details based on checkboxes
+                # Details
+                details = []
+                if options.get('det_physio'):
+                    details.append(f"Load: {int(trimp)} ({focus_type.title()}) | TE: {te} {te_label}")
+                    
                 if options.get('det_adv'):
                     adv = []
                     if r.get('cadence'): adv.append(f"Cad: {r['cadence']}")
                     if r.get('power'): adv.append(f"Pwr: {r['power']}")
                     if r.get('elevation'): adv.append(f"Elev: {r['elevation']}m")
-                    if adv: report.append(f"   Adv: {' | '.join(adv)}")
+                    if adv: details.append(" | ".join(adv))
                 
                 if options.get('det_zones'):
                     z_strs = []
                     for i in range(1,6):
                         val = float(r.get(f'z{i}', 0))
                         if val > 0: z_strs.append(f"Z{i}: {format_duration(val)}")
-                    if z_strs: report.append(f"   Zones: {' | '.join(z_strs)}")
-
-                if options.get('det_notes') and r.get('notes'): report.append(f"   Note: {r['notes']}")
+                    if z_strs: details.append(" | ".join(z_strs))
+                
+                if options.get('det_notes'):
+                    notes_parts = []
+                    if r.get('rpe'): notes_parts.append(f"RPE: {r['rpe']}")
+                    if r.get('feel'): notes_parts.append(f"Feel: {r['feel']}")
+                    if r.get('notes'): notes_parts.append(f"Note: {r['notes']}")
+                    if notes_parts: details.append(" | ".join(notes_parts))
+                
+                if details:
+                    for d in details:
+                        report.append(f"   {d}")
             report.append("")
 
     if "Stats" in selected_cats:
@@ -505,7 +534,7 @@ def render_sidebar():
         if db: st.caption("🟢 Connected to Firestore")
         else: st.caption("🟠 Local Storage (Offline)")
              
-        selected_tab = st.radio("Navigate", ["Training Status", "Cardio Training", "Trends", "Export"], label_visibility="collapsed")
+        selected_tab = st.radio("Navigate", ["Training Status", "Cardio Training", "Activity Calendar", "Export"], label_visibility="collapsed")
         st.divider()
         with st.expander("👤 Athlete Profile"):
             prof = st.session_state.data['user_profile']
@@ -695,6 +724,7 @@ def render_training_status():
     targets = status_data['targets']
     total_4w = status_data['total_4w']
     max_scale = max(targets['low']['max'], buckets['low'], 1) * 1.2
+    
     def draw_focus_bar(label, current, t_min, t_max, color):
         curr_pct = min((current / max_scale) * 100, 100)
         min_pct = min((t_min / max_scale) * 100, 100)
@@ -704,6 +734,7 @@ def render_training_status():
         elif current > t_max: status_txt = "Over-focus"
         else: status_txt = "Balanced"
         return f"""<div style="margin-bottom: 12px;"><div class="load-label"><span>{label}</span> <span>{int(current)} <span style="font-weight:400; font-size:0.7rem;">({status_txt})</span></span></div><div class="load-bar-container"><div class="load-bar-target" style="left: {min_pct}%; width: {width_pct}%;"></div><div class="load-bar-fill" style="width: {curr_pct}%; background-color: {color}; opacity: 0.8;"></div></div></div>"""
+    
     st.markdown(draw_focus_bar("Anaerobic (Purple)", buckets['anaerobic'], targets['anaerobic']['min'], targets['anaerobic']['max'], "#8b5cf6"), unsafe_allow_html=True)
     st.markdown(draw_focus_bar("High Aerobic (Orange)", buckets['high'], targets['high']['min'], targets['high']['max'], "#f97316"), unsafe_allow_html=True)
     st.markdown(draw_focus_bar("Low Aerobic (Blue)", buckets['low'], targets['low']['min'], targets['low']['max'], "#3b82f6"), unsafe_allow_html=True)
@@ -1041,17 +1072,35 @@ def render_trends():
                     else:
                         st.markdown(f"<div style='color:#a8a29e; font-size:0.8em;'>{day}</div>", unsafe_allow_html=True)
                     
+                    # Spacer to ensure minimum height
+                    st.markdown("""<div style="height:40px"></div>""", unsafe_allow_html=True)
+                    
                     if not day_runs.empty:
-                        for _, r in day_runs.iterrows():
+                        # Move content up to overlap spacer if needed, or just append
+                        # Streamlit appends, so visual spacer works best if conditional or CSS min-height on container class
+                        # Since we can't easily target specific container class, we rely on content pushing it.
+                        # To fix layout "jumping", we just ensure content exists.
+                        pass
+
+                    if not day_runs.empty:
+                         for _, r in day_runs.iterrows():
                             # Minimal display: Icon + Dist
-                            icon = "🏃" if r['type'] == "Run" else "🚶" if r['type'] == "Walk" else "🥏"
-                            st.caption(f"{icon} {r['distance']}k")
+                            icon = "directions_run" if r['type'] == "Run" else "directions_walk" if r['type'] == "Walk" else "sports_handball"
+                            st.markdown(f"""
+                            <div class="cal-activity">
+                                <span class="material-symbols-rounded" style="font-size:14px">{icon}</span>
+                                <span style="font-size:0.75rem; font-weight:600;">{r['distance']}k</span>
+                            </div>
+                            """, unsafe_allow_html=True)
                             
                             # Add to totals
                             w_dist += r['distance']
                             w_time += r['duration']
                             w_elev += r.get('elevation', 0)
                             w_count += 1
+                    else:
+                        # Invisible spacer to hold height if empty
+                        st.markdown("""<div style="height:14px"></div>""", unsafe_allow_html=True)
         
         # Render Summary Column
         with cols[7]:
@@ -1139,7 +1188,7 @@ def main():
         render_training_status()
     elif selected_tab == "Cardio Training":
         render_cardio()
-    elif selected_tab == "Trends":
+    elif selected_tab == "Activity Calendar":
         render_trends()
     elif selected_tab == "Export":
         render_share()
