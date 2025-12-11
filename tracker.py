@@ -492,7 +492,7 @@ def generate_report(start_date, end_date, options):
                         report.append(f"   {d}")
             report.append("")
 
-    if "Stats" in selected_cats:
+    if options.get('health'):
         stats = st.session_state.data['health_logs']
         period_stats = [s for s in stats if start_date <= datetime.strptime(s['date'], '%Y-%m-%d').date() <= end_date]
         period_stats.sort(key=lambda x: x['date'])
@@ -953,7 +953,7 @@ def render_cardio():
                 filtered_df = filtered_df.sort_values(by='dt_obj', ascending=False)
                 for idx, row in filtered_df.iterrows():
                     zones = [float(row.get(f'z{i}', 0)) for i in range(1,6)]
-                    trimp, focus = engine.calculate_trimp(float(row['duration']), int(row['avgHr']), zones)
+                    trimp, focus = engine.calculate_trimp(float(row['duration']), int(row.get('avgHr', 0)), zones)
                     te, te_label = engine.get_training_effect(trimp)
                     
                     elev = row.get('elevation', 0)
@@ -967,7 +967,7 @@ def render_cardio():
                         stats_html = f"""<div style="line-height: 1.5;"><span class="history-sub">Dist:</span> <span class="history-value">{row['distance']}km</span><br><span class="history-sub">Time:</span> <span class="history-value">{format_duration(row['duration'])}</span><br><span class="history-sub">{'Note' if row['type'] == 'Ultimate' else 'Pace'}:</span> <span class="history-value">{row.get('notes','-') if row['type']=='Ultimate' else format_pace(row['duration']/row['distance'] if row['distance']>0 else 0)+'/km'}</span></div>"""
                         c_stats.markdown(stats_html, unsafe_allow_html=True)
                         metrics_list = []
-                        if row['avgHr'] > 0: metrics_list.append(f"<span class='history-sub'>HR:</span> <span class='history-value'>{row['avgHr']}</span>")
+                        if row.get('avgHr') and row['avgHr'] > 0: metrics_list.append(f"<span class='history-sub'>HR:</span> <span class='history-value'>{row['avgHr']}</span>")
                         metrics_list.append(f"<span class='history-sub'>Load:</span> <span class='history-value'>{int(trimp)}</span>")
                         metrics_list.append(f"<span class='history-sub'>TE:</span> <span class='history-value status-badge { 'status-green' if 2<=te<4 else 'status-orange' if te>=4 else 'status-gray' }' style='font-size:0.75rem; padding:1px 6px;'>{te} {te_label.split()[0]}</span>")
                         extras = []
