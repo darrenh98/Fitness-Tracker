@@ -430,7 +430,6 @@ def generate_report(start_date, end_date, options):
     
     engine = PhysiologyEngine(st.session_state.data['user_profile'])
     
-    # 1. RUNS / CARDIO
     field_types = []
     if options.get('run'): field_types.append('Run')
     if options.get('walk'): field_types.append('Walk')
@@ -462,7 +461,7 @@ def generate_report(start_date, end_date, options):
                 line += f" ({', '.join(metrics)})" if metrics else ""
                 report.append(line)
                 
-                # Details
+                # Details based on checkboxes
                 details = []
                 if options.get('det_physio'):
                     details.append(f"Load: {int(trimp)} ({focus_type.title()}) | TE: {te} {te_label}")
@@ -1003,6 +1002,7 @@ def render_cardio():
 
 def render_trends():
     st.header(":material/calendar_today: Activity Calendar")
+    setup_page()
     
     # Session State for Month Navigation
     if 'cal_date' not in st.session_state:
@@ -1031,8 +1031,8 @@ def render_trends():
     if not runs_df.empty:
         runs_df['date_dt'] = pd.to_datetime(runs_df['date']).dt.date
     
-    # Calendar Generation
-    cal = calendar.monthcalendar(year, month)
+    # Calendar Generation (Full Weeks)
+    cal = calendar.Calendar(firstweekday=0).monthdatescalendar(year, month)
     
     # Headers
     cols = st.columns([1]*7 + [1.5]) # 7 Days + 1 Summary
@@ -1052,36 +1052,28 @@ def render_trends():
         w_elev = 0
         w_count = 0
         
-        for i, day in enumerate(week):
+        for i, current_date in enumerate(week):
             with cols[i]:
-                if day == 0:
-                    st.markdown("")
-                    continue
-                
                 # Check for runs
-                current_date = date(year, month, day)
                 day_runs = []
                 if not runs_df.empty:
                     day_runs = runs_df[runs_df['date_dt'] == current_date]
+                
+                # Visual distinction
+                is_current_month = current_date.month == month
+                text_color = "color:#44403c" if is_current_month else "color:#a8a29e"
                 
                 # Render Day Cell
                 with st.container(border=True):
                     # Highlight today
                     if current_date == get_malaysia_time().date():
-                        st.markdown(f"<div style='color:#c2410c; font-weight:bold;'>{day}</div>", unsafe_allow_html=True)
+                        st.markdown(f"<div style='color:#c2410c; font-weight:bold;'>{current_date.day}</div>", unsafe_allow_html=True)
                     else:
-                        st.markdown(f"<div style='color:#a8a29e; font-size:0.8em;'>{day}</div>", unsafe_allow_html=True)
+                        st.markdown(f"<div style='{text_color}; font-size:0.9em; font-weight:{'600' if is_current_month else '400'}'>{current_date.day}</div>", unsafe_allow_html=True)
                     
                     # Spacer to ensure minimum height
-                    st.markdown("""<div style="height:40px"></div>""", unsafe_allow_html=True)
+                    st.markdown("""<div style="height:30px"></div>""", unsafe_allow_html=True)
                     
-                    if not day_runs.empty:
-                        # Move content up to overlap spacer if needed, or just append
-                        # Streamlit appends, so visual spacer works best if conditional or CSS min-height on container class
-                        # Since we can't easily target specific container class, we rely on content pushing it.
-                        # To fix layout "jumping", we just ensure content exists.
-                        pass
-
                     if not day_runs.empty:
                          for _, r in day_runs.iterrows():
                             # Minimal display: Icon + Dist
@@ -1098,9 +1090,6 @@ def render_trends():
                             w_time += r['duration']
                             w_elev += r.get('elevation', 0)
                             w_count += 1
-                    else:
-                        # Invisible spacer to hold height if empty
-                        st.markdown("""<div style="height:14px"></div>""", unsafe_allow_html=True)
         
         # Render Summary Column
         with cols[7]:
