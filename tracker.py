@@ -430,6 +430,7 @@ def generate_report(start_date, end_date, options):
     
     engine = PhysiologyEngine(st.session_state.data['user_profile'])
     
+    # 1. RUNS / CARDIO
     field_types = []
     if options.get('run'): field_types.append('Run')
     if options.get('walk'): field_types.append('Walk')
@@ -502,7 +503,7 @@ def generate_report(start_date, end_date, options):
                 date_str = s['date'][5:]
                 sleep_str = format_sleep(s.get('sleepHours', 0))
                 daily_target = engine.get_daily_target(s.get('rhr', 0), s.get('hrv'), s.get('sleepHours', 0))
-                report.append(f"- {date_str}: Sleep: {sleep_str} | RHR {s.get('rhr')} | Readiness: {daily_target['readiness']}")
+                report.append(f"- {date_str}: Sleep: {sleep_str} | RHR {s.get('rhr')} | HRV {s.get('hrv', '-')} | {daily_target['readiness']}")
     
     # --- Status Snapshot at End of Report Period ---
     if options.get('status'):
@@ -723,7 +724,6 @@ def render_training_status():
     targets = status_data['targets']
     total_4w = status_data['total_4w']
     max_scale = max(targets['low']['max'], buckets['low'], 1) * 1.2
-    
     def draw_focus_bar(label, current, t_min, t_max, color):
         curr_pct = min((current / max_scale) * 100, 100)
         min_pct = min((t_min / max_scale) * 100, 100)
@@ -733,7 +733,6 @@ def render_training_status():
         elif current > t_max: status_txt = "Over-focus"
         else: status_txt = "Balanced"
         return f"""<div style="margin-bottom: 12px;"><div class="load-label"><span>{label}</span> <span>{int(current)} <span style="font-weight:400; font-size:0.7rem;">({status_txt})</span></span></div><div class="load-bar-container"><div class="load-bar-target" style="left: {min_pct}%; width: {width_pct}%;"></div><div class="load-bar-fill" style="width: {curr_pct}%; background-color: {color}; opacity: 0.8;"></div></div></div>"""
-    
     st.markdown(draw_focus_bar("Anaerobic (Purple)", buckets['anaerobic'], targets['anaerobic']['min'], targets['anaerobic']['max'], "#8b5cf6"), unsafe_allow_html=True)
     st.markdown(draw_focus_bar("High Aerobic (Orange)", buckets['high'], targets['high']['min'], targets['high']['max'], "#f97316"), unsafe_allow_html=True)
     st.markdown(draw_focus_bar("Low Aerobic (Blue)", buckets['low'], targets['low']['min'], targets['low']['max'], "#3b82f6"), unsafe_allow_html=True)
