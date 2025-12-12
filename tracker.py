@@ -447,7 +447,7 @@ def render_sidebar():
         st.caption(f"🇲🇾 {malaysia_time.strftime('%d %b %Y, %H:%M')}")
         if db: st.caption("🟢 Connected to Firestore")
         else: st.caption("🟠 Local Storage (Offline)")
-        selected_tab = st.radio("Navigate", ["Training Status", "Advanced Status (Beta)", "Cardio Training", "Activity Calendar", "Export"], label_visibility="collapsed")
+        selected_tab = st.radio("Navigate", ["Training Status", "Cardio Training", "Activity Calendar", "Export"], label_visibility="collapsed")
         st.divider()
         with st.expander("👤 Athlete Profile"):
             prof = st.session_state.data['user_profile']
@@ -653,21 +653,50 @@ def render_training_status():
     buckets = status_data['buckets']
     targets = status_data['targets']
     max_scale = max(max(targets['low']['max'], buckets['low']), max(targets['high']['max'], buckets['high']), max(targets['anaerobic']['max'], buckets['anaerobic']), 1) * 1.15
-    def draw_focus_bar(label, current, t_min, t_max, color):
-        curr_pct = min((current / max_scale) * 100, 100)
-        min_pct = min((t_min / max_scale) * 100, 100)
-        max_pct = min((t_max / max_scale) * 100, 100)
-        width_pct = max_pct - min_pct
-        if width_pct < 2: width_pct = 2
-        if current < t_min: status_txt = "Shortage"
-        elif current > t_max: status_txt = "Over-focus"
-        else: status_txt = "Balanced"
-        return f"""<div style="margin-bottom: 12px;"><div class="load-label"><span>{label}</span> <span>{int(current)} <span style="font-weight:400; font-size:0.7rem;">({status_txt})</span></span></div><div class="load-bar-container"><div class="load-bar-target" style="left: {min_pct}%; width: {width_pct}%;"></div><div class="load-bar-fill" style="width: {curr_pct}%; background-color: {color}; opacity: 0.8;"></div></div></div>"""
-    st.markdown(draw_focus_bar("Anaerobic (Purple)", buckets['anaerobic'], targets['anaerobic']['min'], targets['anaerobic']['max'], "#8b5cf6"), unsafe_allow_html=True)
-    st.markdown(draw_focus_bar("High Aerobic (Orange)", buckets['high'], targets['high']['min'], targets['high']['max'], "#f97316"), unsafe_allow_html=True)
-    st.markdown(draw_focus_bar("Low Aerobic (Blue)", buckets['low'], targets['low']['min'], targets['low']['max'], "#3b82f6"), unsafe_allow_html=True)
+    
+    # Create Radar Chart
+    categories = ['Low Aerobic', 'High Aerobic', 'Anaerobic']
+    # Actual values
+    actual_values = [buckets['low'], buckets['high'], buckets['anaerobic']]
+    # Target values (using max as the outer edge reference)
+    target_values = [targets['low']['max'], targets['high']['max'], targets['anaerobic']['max']]
+    
+    fig_radar = go.Figure()
+    
+    # Target Trace (Background)
+    fig_radar.add_trace(go.Scatterpolar(
+        r=target_values,
+        theta=categories,
+        fill='toself',
+        name='Target Zone',
+        line=dict(color='rgba(200, 200, 200, 0.5)'),
+        fillcolor='rgba(200, 200, 200, 0.2)'
+    ))
+    
+    # Actual Trace
+    fig_radar.add_trace(go.Scatterpolar(
+        r=actual_values,
+        theta=categories,
+        fill='toself',
+        name='Current Load',
+        line=dict(color='#c2410c'), # Rust color
+        fillcolor='rgba(194, 65, 12, 0.4)'
+    ))
+    
+    fig_radar.update_layout(
+        polar=dict(
+            radialaxis=dict(visible=True, range=[0, max(max(actual_values), max(target_values)) * 1.1])
+        ),
+        showlegend=True,
+        height=350,
+        margin=dict(l=40, r=40, t=20, b=20)
+    )
+    st.plotly_chart(fig_radar, use_container_width=True)
+
+    # --- Sparklines for RHR & HRV ---
     st.divider()
     st.subheader("Recovery Trends (7 Days)")
+    
     health_logs = st.session_state.data['health_logs']
     df_health = pd.DataFrame(health_logs)
     if not df_health.empty:
@@ -1068,7 +1097,7 @@ def render_share():
         st.markdown("**Run Details**")
         c7, c8, c9, c10 = st.columns(4)
         det_physio = c7.checkbox("Physio (HR/Load)", value=True)
-        det_adv = c8.checkbox("Cadence & Power", value=True)
+        det_adv = c8.checkbox("Advanced (Cad/Pwr/Elev)", value=True)
         det_zones = c9.checkbox("HR Zones", value=True)
         det_notes = c10.checkbox("Notes & Feel", value=True)
         
