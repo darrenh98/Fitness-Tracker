@@ -61,6 +61,7 @@ def setup_page():
         .bio-item { display: flex; align-items: center; gap: 4px; }
         .cal-day-box { min-height: 80px; display: flex; flex-direction: column; justify-content: flex-start; }
         .cal-activity { font-size: 0.8rem; color: #44403c; display: flex; align-items: center; gap: 4px; margin-top: 2px; }
+        .insight-box { font-size: 0.9rem; color: #57534e; background-color: #f5f5f4; padding: 12px; border-radius: 8px; margin-top: 10px; border-left: 4px solid #c2410c; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -210,7 +211,6 @@ class PhysiologyEngine:
             elif avg_hr > z2_upper: focus_scores['high'] = load
             else: focus_scores['low'] = load
         
-        # RPE fallback
         if load == 0 and rpe and rpe > 0:
              load = duration_min * rpe * 0.3
              if rpe >= 8: focus_scores['anaerobic'] = load
@@ -221,21 +221,22 @@ class PhysiologyEngine:
 
     def get_daily_target(self, current_rhr, current_hrv=None, current_sleep=0):
         diff = current_rhr - self.hr_rest
-        if diff < -2:
-            return {"readiness": "High", "recommendation": "Go Hard / Interval Day", "target_load": "Heavy (e.g., Threshold)", "message": "Green light. System primed.", "color": "#65a30d", "bg": "#dcfce7", "rhr_stat": "Good", "hrv_stat": "Normal", "sleep_stat": "Normal"}
-        elif diff > 5:
-            return {"readiness": "Low", "recommendation": "Active Recovery", "target_load": "Recovery (e.g., 30m easy)", "message": "Red light. Focus on sleep.", "color": "#be123c", "bg": "#fee2e2", "rhr_stat": "High", "hrv_stat": "Low", "sleep_stat": "Poor"}
+        hrv_diff = (current_hrv - self.hrv_baseline) if current_hrv else 0
+        
+        is_rhr_bad = diff > 5
+        is_hrv_bad = hrv_diff < -10
+        is_sleep_bad = current_sleep < 5.5
+        
+        rhr_stat = "High" if is_rhr_bad else "Normal"
+        hrv_stat = "Low" if is_hrv_bad else "Normal"
+        sleep_stat = "Poor" if is_sleep_bad else "Good"
+
+        if is_rhr_bad or is_hrv_bad or is_sleep_bad:
+            return {"readiness": "Low", "recommendation": "Active Recovery", "target_load": "Recovery", "message": "Red light. Focus on sleep.", "color": "#be123c", "bg": "#fee2e2", "rhr_stat": rhr_stat, "hrv_stat": hrv_stat, "sleep_stat": sleep_stat}
+        elif diff < -2 and hrv_diff > -5:
+            return {"readiness": "High", "recommendation": "Go Hard", "target_load": "Heavy", "message": "Green light. System primed.", "color": "#65a30d", "bg": "#dcfce7", "rhr_stat": "Good", "hrv_stat": "Good", "sleep_stat": "Good"}
         else:
-            return {"readiness": "Moderate", "recommendation": "Steady State", "target_load": "Maintenance (e.g., Z2)", "message": "Train, but keep controlled.", "color": "#ea580c", "bg": "#ffedd5", "rhr_stat": "Normal", "hrv_stat": "Normal", "sleep_stat": "Normal"}
-    
-    def get_dynamic_daily_target(self, current_rhr, current_hrv, avg_7d_rhr, avg_7d_hrv):
-        if not avg_7d_rhr or not avg_7d_hrv: return self.get_daily_target(current_rhr, current_hrv)
-        rhr_z = current_rhr - avg_7d_rhr; hrv_z = current_hrv - avg_7d_hrv
-        is_fatigued = (rhr_z > 3) or (hrv_z < -10)
-        is_prime = (rhr_z < -2) and (hrv_z > -5)
-        if is_fatigued: return {"readiness": "Low", "recommendation": "Recovery / Rest", "target_load": "Light (<40)", "message": f"Fatigue detected vs 7-day trend (RHR +{rhr_z:.1f})", "color": "#be123c", "bg": "#fee2e2"}
-        elif is_prime: return {"readiness": "High", "recommendation": "Intervals / Tempo", "target_load": "Heavy (>120)", "message": "Primed. Stats better than recent avg.", "color": "#65a30d", "bg": "#dcfce7"}
-        else: return {"readiness": "Moderate", "recommendation": "Base / Aerobic", "target_load": "Normal (60-100)", "message": "Stable. Maintain volume.", "color": "#ea580c", "bg": "#ffedd5"}
+            return {"readiness": "Moderate", "recommendation": "Steady State", "target_load": "Maintenance", "message": "Train, but keep controlled.", "color": "#ea580c", "bg": "#ffedd5", "rhr_stat": "Normal", "hrv_stat": "Normal", "sleep_stat": "Normal"}
 
     def get_training_effect(self, trimp_score):
         scaling = self.vo2_max * 1.5
@@ -251,59 +252,66 @@ class PhysiologyEngine:
 
     def calculate_training_status(self, activity_history, reference_date=None):
         today = reference_date if reference_date else get_malaysia_time().date()
-        history_series = []
-        for i in range(28):
-            d = today - timedelta(days=27-i)
-            day_acute, day_chronic_total = 0, 0
-            d_acute_start, d_chronic_start = d - timedelta(days=6), d - timedelta(days=27)
-            for activity in activity_history:
-                act_date = datetime.strptime(activity['date'], '%Y-%m-%d').date()
-                if act_date > d: continue
-                load = activity.get('load', 0)
-                if d_acute_start <= act_date <= d: day_acute += load
-                if d_chronic_start <= act_date <= d: day_chronic_total += load
-            day_chronic = day_chronic_total / 4.0 if day_chronic_total > 0 else 1.0
-            ratio = day_acute / day_chronic if day_chronic > 0 else 0
-            history_series.append({'date': d, 'acute': day_acute, 'chronic': day_chronic, 'ratio': ratio, 'optimal_min': day_chronic * 0.8, 'optimal_max': day_chronic * 1.3})
-
-        current_status = history_series[-1]
+        
+        # Simple ACWR Calculation for quick glance
+        acute_load = 0
+        chronic_load_total = 0
         buckets = {'low': 0, 'high': 0, 'anaerobic': 0}
-        chronic_start_today = today - timedelta(days=27)
+        
+        acute_start = today - timedelta(days=6)
+        chronic_start = today - timedelta(days=27)
+
         for activity in activity_history:
             act_date = datetime.strptime(activity['date'], '%Y-%m-%d').date()
             if act_date > today: continue
-            if chronic_start_today <= act_date <= today:
-                 focus = activity.get('focus', {})
-                 buckets['low'] += focus.get('low', 0)
-                 buckets['high'] += focus.get('high', 0)
-                 buckets['anaerobic'] += focus.get('anaerobic', 0)
+            
+            load = activity.get('load', 0)
+            if acute_start <= act_date <= today:
+                acute_load += load
+            if chronic_start <= act_date <= today:
+                chronic_load_total += load
+                focus = activity.get('focus', {})
+                buckets['low'] += focus.get('low', 0)
+                buckets['high'] += focus.get('high', 0)
+                buckets['anaerobic'] += focus.get('anaerobic', 0)
 
+        chronic_load_weekly = chronic_load_total / 4.0 if chronic_load_total > 0 else 1.0
+        ratio = acute_load / chronic_load_weekly
+        
+        status = "Recovery"
+        color_class = "status-gray"
+        description = "Load is very low."
+
+        if ratio > 1.5: status = "Overreaching"; color_class = "status-red"; description = "High injury risk!"
+        elif 1.3 <= ratio <= 1.5: status = "High Strain"; color_class = "status-orange"; description = "Caution"
+        elif 0.8 <= ratio < 1.3: status = "Productive"; color_class = "status-green"; description = "Optimal"
+        
         total_chronic = sum(buckets.values())
         targets = {'low': {'min': total_chronic * 0.70, 'max': total_chronic * 0.90}, 'high': {'min': total_chronic * 0.10, 'max': total_chronic * 0.25}, 'anaerobic': {'min': total_chronic * 0.0, 'max': total_chronic * 0.10}}
-        feedback = "Balanced! Well done."
+        feedback = "Balanced!"
         if buckets['low'] < targets['low']['min']: feedback = "Shortage: Low Aerobic."
         elif buckets['high'] < targets['high']['min']: feedback = "Shortage: High Aerobic."
         elif buckets['anaerobic'] < targets['anaerobic']['min'] and total_chronic > 500: feedback = "Shortage: Anaerobic."
-        
-        ratio = current_status['ratio']
-        if ratio > 1.5: status = "Overreaching"; color_class = "status-red"; description = "High injury risk! Spike in load."
-        elif 1.3 <= ratio <= 1.5: status = "High Strain"; color_class = "status-orange"; description = "Caution: Rapid increase."
-        elif 0.8 <= ratio < 1.3: status = "Productive"; color_class = "status-green"; description = "Optimal training zone."
-        else: status = "Recovery"; color_class = "status-gray"; description = "Workload decreasing."
 
         return {
-            "acute": round(current_status['acute']), "chronic": round(current_status['chronic']),
+            "acute": round(acute_load), "chronic": round(chronic_load_weekly),
             "ratio": round(ratio, 2), "status": status, "css": color_class,
             "desc": description, "buckets": buckets, "targets": targets,
-            "feedback": feedback, "history": history_series, "total_4w": total_chronic
+            "feedback": feedback, "total_4w": total_chronic
         }
 
     def calculate_ewma_status(self, runs, reference_date=None):
         today = reference_date if reference_date else get_malaysia_time().date()
+        
+        # 1. Aggregate Daily Loads
         daily_loads = {}
+        # Find earliest date to start calculation (avoid cold start if possible)
+        start_date = today
+        
         for r in runs:
             try:
                 d = datetime.strptime(r['date'], '%Y-%m-%d').date()
+                if d < start_date: start_date = d
                 if d > today: continue
                 zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
                 hr = int(r.get('avgHr', 0)) if r.get('avgHr') else 0
@@ -311,20 +319,31 @@ class PhysiologyEngine:
                 trimp, _ = self.calculate_trimp(float(r['duration']), hr, zones, rpe)
                 daily_loads[d] = daily_loads.get(d, 0) + trimp
             except: continue
-
-        date_range = [today - timedelta(days=x) for x in range(84)]
-        date_range.sort()
+        
+        # 2. Generate Full Date Range
+        if not runs: return pd.DataFrame()
+        
+        # Start 6 weeks before first run if possible, or just start at first run
+        calc_start = start_date 
+        delta_days = (today - calc_start).days + 1
+        date_range = [calc_start + timedelta(days=x) for x in range(delta_days)]
+        
         ewma_data = []
-        atl, ctl = 0, 0
-        k_atl, k_ctl = 2/(7+1), 2/(42+1)
+        atl = 0 # 7-day
+        ctl = 0 # 42-day
+        k_atl = 2/(7+1)
+        k_ctl = 2/(42+1)
         
         for d in date_range:
             load = daily_loads.get(d, 0)
-            if d == date_range[0]: atl = load; ctl = load
+            if d == date_range[0]: 
+                atl = load
+                ctl = load
             else:
                 atl = (load * k_atl) + (atl * (1 - k_atl))
                 ctl = (load * k_ctl) + (ctl * (1 - k_ctl))
             ewma_data.append({'date': d, 'load': load, 'atl': atl, 'ctl': ctl, 'tsb': ctl - atl})
+            
         return pd.DataFrame(ewma_data)
 
 # --- Report Generation ---
@@ -376,34 +395,28 @@ def generate_report(start_date, end_date, options):
             report.append(line)
             details = []
             if options.get('det_physio'):
-                # Find dominant focus type for summary
                 focus_type = max(focus, key=focus.get) if focus else "low"
                 details.append(f"Load: {int(trimp)} ({focus_type.title()}) | TE: {te} {te_label}")
-                
             if options.get('det_adv'):
                 adv = []
                 if r.get('cadence'): adv.append(f"Cad: {r['cadence']}")
                 if r.get('power'): adv.append(f"Pwr: {r['power']}")
                 if r.get('elevation'): adv.append(f"Elev: {r['elevation']}m")
                 if adv: details.append(" | ".join(adv))
-            
             if options.get('det_zones'):
                 z_strs = []
                 for i in range(1,6):
                     val = float(r.get(f'z{i}', 0))
                     if val > 0: z_strs.append(f"Z{i}: {format_duration(val)}")
                 if z_strs: details.append(" | ".join(z_strs))
-            
             if options.get('det_notes'):
                 notes_parts = []
                 if r.get('rpe'): notes_parts.append(f"RPE: {r['rpe']}")
                 if r.get('feel'): notes_parts.append(f"Feel: {r['feel']}")
                 if r.get('notes'): notes_parts.append(f"Note: {r['notes']}")
                 if notes_parts: details.append(" | ".join(notes_parts))
-            
             if details:
-                for d in details:
-                    report.append(f"   {d}")
+                for d in details: report.append(f"   {d}")
         report.append("")
 
     if options.get('health') and period_stats:
@@ -415,139 +428,25 @@ def generate_report(start_date, end_date, options):
             daily_target = engine.get_daily_target(s.get('rhr', 0), s.get('hrv'), s.get('sleepHours', 0))
             report.append(f"- {date_str}: Sleep: {sleep_str} | RHR {s.get('rhr')} | HRV {s.get('hrv', '-')} | {daily_target['readiness']}")
     
-    # --- Status Snapshot at End of Report Period ---
     if options.get('status'):
-        all_runs = st.session_state.data['runs']
-        h_data = []
-        for r in all_runs:
-            zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
-            trimp, focus = engine.calculate_trimp(float(r['duration']), int(r.get('avgHr', 0)), zones)
-            h_data.append({'date': r['date'], 'load': trimp, 'focus': focus})
-        
-        status = engine.calculate_training_status(h_data, reference_date=end_date)
-        report.append("")
-        report.append(f"STATUS (As of {end_date})")
-        report.append(f"State: {status['status']}")
-        report.append(f"ACWR: {status['ratio']} (Acute: {status['acute']} / Chronic: {status['chronic']})")
-        buckets = status['buckets']
-        report.append(f"Focus: Low: {int(buckets['low'])} | High: {int(buckets['high'])} | Anaerobic: {int(buckets['anaerobic'])}")
-    
-    # --- Advanced Status (EWMA) ---
-    if options.get('adv_status'):
         all_runs = st.session_state.data['runs']
         df_ewma = engine.calculate_ewma_status(all_runs, reference_date=end_date)
         if not df_ewma.empty:
             current = df_ewma.iloc[-1]
-            monotony = df_ewma['load'].tail(7).mean() / df_ewma['load'].tail(7).std() if df_ewma['load'].tail(7).std() > 0 else 0
-            
             report.append("")
-            report.append(f"ADVANCED STATUS (EWMA as of {end_date})")
+            report.append(f"STATUS (EWMA as of {end_date})")
             report.append(f"Fitness (CTL): {int(current['ctl'])}")
             report.append(f"Fatigue (ATL): {int(current['atl'])}")
             report.append(f"Form (TSB): {int(current['tsb'])}")
+            
+            # Simple ACWR fallback for report if needed, but EWMA is superior
+            # We can also add Monotony here
+            monotony = df_ewma['load'].tail(7).mean() / df_ewma['load'].tail(7).std() if df_ewma['load'].tail(7).std() > 0 else 0
             report.append(f"Monotony (7d): {monotony:.2f}")
 
     return "\n".join(report)
 
-# --- Renderers ---
-
-def render_advanced_status():
-    st.header(":material/science: Advanced Status (Beta)")
-    setup_page()
-    
-    runs = st.session_state.data['runs']
-    health = st.session_state.data['health_logs']
-    
-    if not runs:
-        st.info("Log more activities to see advanced status.")
-        return
-
-    # --- EWMA Calculation ---
-    engine = PhysiologyEngine(st.session_state.data['user_profile'])
-    df_ewma = engine.calculate_ewma_status(runs)
-    current = df_ewma.iloc[-1]
-    
-    # --- UI: Top Level Metrics ---
-    st.subheader("EWMA Training Status")
-    c1, c2, c3, c4 = st.columns(4)
-    
-    # Calculate Deltas
-    past_7d = df_ewma.iloc[-8] if len(df_ewma) > 7 else df_ewma.iloc[0]
-    d_ctl = int(current['ctl'] - past_7d['ctl'])
-    d_atl = int(current['atl'] - past_7d['atl'])
-    d_tsb = int(current['tsb'] - past_7d['tsb'])
-    
-    c1.metric("Fitness (CTL)", f"{int(current['ctl'])}", f"{d_ctl}", help="Chronic Training Load (42-day avg)")
-    c2.metric("Fatigue (ATL)", f"{int(current['atl'])}", f"{d_atl}", delta_color="inverse", help="Acute Training Load (7-day avg)")
-    c3.metric("Form (TSB)", f"{int(current['tsb'])}", f"{d_tsb}", help="Training Stress Balance")
-    
-    monotony = df_ewma['load'].tail(7).mean() / df_ewma['load'].tail(7).std() if df_ewma['load'].tail(7).std() > 0 else 0
-    c4.metric("Monotony", f"{monotony:.1f}", help=">2.0 indicates high injury risk")
-    
-    # --- Insight Cards ---
-    st.write("")
-    
-    tsb = current['tsb']
-    if tsb < -30:
-        st.error(f"**Form: Overload Warning ({int(tsb)})**\n\nHigh Risk zone. Fatigue excessive. Rest recommended.")
-    elif -30 <= tsb < -10:
-        st.success(f"**Form: Optimal Training ({int(tsb)})**\n\nProductive zone. Building fitness sustainably.")
-    elif -10 <= tsb < 10:
-        st.info(f"**Form: Neutral / Fresh ({int(tsb)})**\n\nTransition zone. Good for maintenance or tapering.")
-    elif tsb >= 10:
-        st.warning(f"**Form: Detraining Warning ({int(tsb)})**\n\nVery fresh. Likely losing fitness if not tapering.")
-
-    # --- Graph ---
-    st.divider()
-    
-    # Slice to show only last 6 weeks (42 days) for better readability, 
-    # even though we calculated over 12 weeks for stability.
-    df_chart = df_ewma.tail(42) 
-    
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df_chart['date'], y=df_chart['ctl'], fill='tozeroy', name='Fitness (CTL)', line=dict(color='rgba(34, 197, 94, 0.5)')))
-    fig.add_trace(go.Scatter(x=df_chart['date'], y=df_chart['atl'], name='Fatigue (ATL)', line=dict(color='#be123c')))
-    fig.update_layout(title="Performance Management Chart (EWMA)", height=350, margin=dict(l=20,r=20,t=40,b=20), hovermode="x unified")
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # --- Dynamic Readiness ---
-    st.divider()
-    st.subheader("Dynamic Readiness (Rolling Baseline)")
-    
-    today = get_malaysia_time().date()
-    if len(health) < 7:
-        st.warning("Need at least 7 days of health logs for dynamic baselines.")
-    else:
-        df_h = pd.DataFrame(health)
-        df_h['date'] = pd.to_datetime(df_h['date']).dt.date
-        df_h = df_h.sort_values('date')
-        
-        baseline_window = df_h[df_h['date'] < today].tail(7)
-        if not baseline_window.empty:
-            avg_rhr_7d = baseline_window['rhr'].mean()
-            avg_hrv_7d = baseline_window['hrv'].mean()
-            
-            today_log = df_h[df_h['date'] == today]
-            if not today_log.empty:
-                curr_rhr = today_log.iloc[0]['rhr']
-                curr_hrv = today_log.iloc[0]['hrv']
-                target = engine.get_dynamic_daily_target(curr_rhr, curr_hrv, avg_rhr_7d, avg_7d_hrv=avg_hrv_7d)
-                
-                st.markdown(f"""
-                <div style="background-color: {target['bg']}; padding: 1.5rem; border-radius: 12px; border: 1px solid {target['color']};">
-                    <h3 style="color: {target['color']}; margin:0;">{target['readiness']} Readiness</h3>
-                    <p style="font-weight: bold; margin: 5px 0;">{target['recommendation']}</p>
-                    <p>{target['message']}</p>
-                    <hr style="margin: 10px 0; border-color: {target['color']}; opacity: 0.3;">
-                    <div style="display: flex; justify-content: space-between; font-size: 0.9rem;">
-                        <span><b>Baseline RHR:</b> {avg_rhr_7d:.1f}</span>
-                        <span><b>Baseline HRV:</b> {avg_hrv_7d:.1f}</span>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.info("Log today's health stats to see dynamic readiness.")
-
+# --- Sidebar Navigation ---
 def render_sidebar():
     with st.sidebar:
         st.title(":material/sprint: RunLog Hub")
@@ -555,7 +454,7 @@ def render_sidebar():
         st.caption(f"🇲🇾 {malaysia_time.strftime('%d %b %Y, %H:%M')}")
         if db: st.caption("🟢 Connected to Firestore")
         else: st.caption("🟠 Local Storage (Offline)")
-        selected_tab = st.radio("Navigate", ["Training Status", "Advanced Status (Beta)", "Cardio Training", "Activity Calendar", "Export"], label_visibility="collapsed")
+        selected_tab = st.radio("Navigate", ["Training Status", "Cardio Training", "Activity Calendar", "Export"], label_visibility="collapsed")
         st.divider()
         with st.expander("👤 Athlete Profile"):
             prof = st.session_state.data['user_profile']
@@ -587,8 +486,7 @@ def render_sidebar():
             if st.button("Save Profile"):
                 new_prof = {
                     'weight': new_weight, 'height': new_height, 'gender': gender,
-                    'hrMax': hr_max, 'hrRest': m_rhr, 'vo2Max': vo2, 
-                    'monthAvgRHR': m_rhr, 'monthAvgHRV': m_hrv,
+                    'hrMax': hr_max, 'hrRest': m_rhr, 'vo2Max': vo2, 'monthAvgRHR': m_rhr, 'monthAvgHRV': m_hrv,
                     'zones': {"z1_u": z1_u, "z2_l": z2_l, "z2_u": z2_u, "z3_l": z3_l, "z3_u": z3_u, "z4_l": z4_l, "z4_u": z4_u, "z5_l": z5_l}
                 }
                 st.session_state.data['user_profile'].update(new_prof)
@@ -602,19 +500,25 @@ def render_sidebar():
 def render_training_status():
     st.header(":material/monitor_heart: Training Status")
     setup_page()
+    
     with st.container(border=True):
         c_header, c_date = st.columns([3, 2])
         c_header.subheader("☀️ Morning Update")
         h_date = c_date.date_input("Log Date", get_malaysia_time(), label_visibility="collapsed")
         existing_log = next((log for log in st.session_state.data['health_logs'] if log['date'] == str(h_date)), None)
+        
         if 'edit_morning_date' not in st.session_state: st.session_state.edit_morning_date = None
         is_editing = (st.session_state.edit_morning_date == str(h_date))
+        
+        # Calculate deltas for display
         prof = st.session_state.data['user_profile']
         base_rhr = prof.get('monthAvgRHR', 60)
         base_hrv = prof.get('monthAvgHRV', 40)
+        
         if existing_log and not is_editing:
             rhr_diff = existing_log['rhr'] - base_rhr
             hrv_diff = existing_log.get('hrv', 40) - base_hrv
+            
             v1, v2, v3, v4 = st.columns(4)
             v1.metric("Sleep", format_sleep(existing_log['sleepHours']))
             v2.metric("RHR", f"{existing_log['rhr']}", f"{rhr_diff} bpm", delta_color="inverse")
@@ -653,46 +557,105 @@ def render_training_status():
                     st.rerun()
             if is_editing:
                 if st.button("Cancel Edit"): st.session_state.edit_morning_date = None; st.rerun()
+    
         display_log = existing_log if existing_log else (st.session_state.data['health_logs'][0] if st.session_state.data['health_logs'] else None)
         if display_log:
             engine = PhysiologyEngine(st.session_state.data['user_profile'])
             target_data = engine.get_daily_target(display_log['rhr'], display_log.get('hrv', 40), display_log.get('sleepHours', 0))
-            st.markdown(f"""<div class="daily-target" style="border-left: 6px solid {target_data['color']}; background-color: {target_data.get('bg', '#ffffff')};"><div class="target-header"><span style="color: {target_data['color']};">{target_data['readiness']} Readiness</span><span style="font-weight:400; color:#64748b; font-size:0.9rem;">• RHR {display_log['rhr']} (Base {base_rhr})</span></div><div style="font-size: 1.2rem; font-weight:700; color:#1e293b;">{target_data['recommendation']}</div><div class="target-load">Target: {target_data['target_load']}</div><div style="font-size: 0.9rem; color:#475569; font-style:italic;">"{target_data['message']}"</div></div>""", unsafe_allow_html=True)
+            
+            st.markdown(f"""
+<div class="daily-target" style="border-left: 6px solid {target_data['color']}; background-color: {target_data.get('bg', '#ffffff')};">
+    <div class="target-header">
+        <span style="color: {target_data['color']};">{target_data['readiness']} Readiness</span>
+    </div>
+    <div style="font-size: 1.2rem; font-weight:700; color:#1e293b;">{target_data['recommendation']}</div>
+    <div class="target-load">Target: {target_data['target_load']}</div>
+    <div style="font-size: 0.9rem; color:#475569; font-style:italic; margin-bottom:10px;">"{target_data['message']}"</div>
+    <div class="bio-row">
+        <div class="bio-item"><b>RHR:</b> {display_log['rhr']} <span style="font-size:0.75em">({target_data['rhr_stat']})</span></div>
+        <div class="bio-item"><b>HRV:</b> {display_log.get('hrv', '-')} <span style="font-size:0.75em">({target_data['hrv_stat']})</span></div>
+        <div class="bio-item"><b>Sleep:</b> {format_sleep(display_log['sleepHours'])} <span style="font-size:0.75em">({target_data['sleep_stat']})</span></div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
     st.divider()
-    engine = PhysiologyEngine(st.session_state.data['user_profile'])
-    history_data = []
+    
+    # --- EWMA Calculations ---
     runs = st.session_state.data['runs']
-    for r in runs:
-        zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
-        trimp, focus = engine.calculate_trimp(float(r['duration']), int(r['avgHr']), zones)
-        te, te_label = engine.get_training_effect(trimp)
-        history_data.append({'date': r['date'], 'load': trimp, 'te': te, 'te_lbl': te_label, 'type': r['type'], 'focus': focus})
-    status_data = engine.calculate_training_status(history_data)
-    with st.container(border=True):
-        st.subheader("Physiological Status")
-        sc1, sc2 = st.columns([3, 2])
-        with sc1:
-            st.markdown(f"""<div style="background-color: {status_data['css'] == 'status-green' and '#dcfce7' or status_data['css'] == 'status-red' and '#fee2e2' or status_data['css'] == 'status-orange' and '#ffedd5' or '#f1f5f9'}; padding: 1rem; border-radius: 12px; border: 1px solid #e2e8f0;"><h2 style="margin:0; color: #0f172a;">{status_data['status']}</h2><p style="margin:5px 0 0 0; color: #475569;">{status_data['desc']}</p></div>""", unsafe_allow_html=True)
-            st.markdown(f"<div style='margin-top:10px; font-weight:500; color:#4b5563;'>{status_data['feedback']}</div>", unsafe_allow_html=True)
-        with sc2:
-            ratio_val = status_data['ratio']
-            st.metric("ACWR", ratio_val, delta=None)
-            history_df = pd.DataFrame(status_data['history'])
-            if not history_df.empty:
-                fig_tunnel = go.Figure()
-                fig_tunnel.add_trace(go.Scatter(x=history_df['date'], y=history_df['optimal_max'], mode='lines', line=dict(width=0), showlegend=False, hoverinfo='skip'))
-                fig_tunnel.add_trace(go.Scatter(x=history_df['date'], y=history_df['optimal_min'], mode='lines', line=dict(width=0), fill='tonexty', fillcolor='rgba(34, 197, 94, 0.2)', name='Optimal Band'))
-                fig_tunnel.add_trace(go.Scatter(x=history_df['date'], y=history_df['acute'], mode='lines+markers', line=dict(color='#0f172a', width=3), name='Acute Load'))
-                fig_tunnel.update_layout(title="Chronic vs Acute", xaxis_title="", yaxis_title="Load", margin=dict(l=20, r=20, t=30, b=20), height=200, showlegend=False, plot_bgcolor='white', hovermode="x unified")
-                st.plotly_chart(fig_tunnel, use_container_width=True)
-    c1, c2 = st.columns(2)
-    with c1: st.metric("Acute Load (7d)", int(status_data['acute']))
-    with c2: st.metric("Chronic Load (28d)", int(status_data['chronic']))
+    engine = PhysiologyEngine(st.session_state.data['user_profile'])
+    
+    if runs:
+        df_ewma = engine.calculate_ewma_status(runs)
+        if not df_ewma.empty:
+            current = df_ewma.iloc[-1]
+            past_7d = df_ewma.iloc[-8] if len(df_ewma) > 7 else df_ewma.iloc[0]
+            
+            d_ctl = int(current['ctl'] - past_7d['ctl'])
+            d_atl = int(current['atl'] - past_7d['atl'])
+            d_tsb = int(current['tsb'] - past_7d['tsb'])
+            
+            # --- Metrics Grid ---
+            c1, c2, c3, c4 = st.columns(4)
+            # ACWR
+            acwr = current['atl'] / current['ctl'] if current['ctl'] > 0 else 0
+            c1.metric("ACWR", f"{acwr:.2f}", help="Acute:Chronic Workload Ratio. 0.8-1.3 is optimal.")
+            
+            c2.metric("Fitness (CTL)", f"{int(current['ctl'])}", f"{d_ctl}", help="Chronic Training Load (42-day avg). Measures fitness.")
+            c3.metric("Fatigue (ATL)", f"{int(current['atl'])}", f"{d_atl}", delta_color="inverse", help="Acute Training Load (7-day avg). Measures tiredness.")
+            c4.metric("Form (TSB)", f"{int(current['tsb'])}", f"{d_tsb}", help="Training Stress Balance. Positive = Fresh.")
+            
+            # --- Insight Card (Replaces Gauge) ---
+            tsb = current['tsb']
+            if tsb < -30:
+                st.error(f"**Overload Warning**\n\nHigh Risk zone. Fatigue excessive compared to fitness. Rest recommended.")
+            elif -30 <= tsb < -10:
+                st.success(f"**Optimal Training**\n\nProductive zone. You are building fitness sustainably.")
+            elif -10 <= tsb < 10:
+                st.info(f"**Fresh / Maintenance**\n\nTransition zone. Good for race week or easy weeks.")
+            elif tsb >= 10:
+                st.warning(f"**Detraining Warning**\n\nVery fresh. You are losing fitness if not tapering for a race.")
+            
+            # --- Interactive PMC Graph ---
+            st.write("")
+            fig = go.Figure()
+            # Fitness (Area)
+            fig.add_trace(go.Scatter(x=df_ewma['date'], y=df_ewma['ctl'], fill='tozeroy', name='Fitness (CTL)', line=dict(color='rgba(34, 197, 94, 0.5)')))
+            # Fatigue (Line)
+            fig.add_trace(go.Scatter(x=df_ewma['date'], y=df_ewma['atl'], name='Fatigue (ATL)', line=dict(color='#be123c')))
+            # Form (Line - Optional, maybe secondary axis? Keeping simple for now)
+            
+            fig.update_layout(
+                title="Performance Management Chart (History)",
+                height=350,
+                margin=dict(l=20,r=20,t=40,b=20),
+                hovermode="x unified",
+                xaxis=dict(
+                    rangeselector=dict(
+                        buttons=list([
+                            dict(count=1, label="1m", step="month", stepmode="backward"),
+                            dict(count=3, label="3m", step="month", stepmode="backward"),
+                            dict(count=6, label="6m", step="month", stepmode="backward"),
+                            dict(count=1, label="YTD", step="year", stepmode="todate"),
+                            dict(step="all")
+                        ])
+                    ),
+                    type="date"
+                )
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+    # --- Load Focus ---
     st.divider()
     st.subheader("Load Focus (4 weeks)")
+    
+    # Calculate Buckets (reusing logic from PhysiologyEngine)
+    status_data = engine.calculate_training_status(runs) # This still provides useful bucket sums
     buckets = status_data['buckets']
     targets = status_data['targets']
+    
     max_scale = max(targets['low']['max'], buckets['low'], 1) * 1.2
+    
     def draw_focus_bar(label, current, t_min, t_max, color):
         curr_pct = min((current / max_scale) * 100, 100)
         min_pct = min((t_min / max_scale) * 100, 100)
@@ -702,11 +665,15 @@ def render_training_status():
         elif current > t_max: status_txt = "Over-focus"
         else: status_txt = "Balanced"
         return f"""<div style="margin-bottom: 12px;"><div class="load-label"><span>{label}</span> <span>{int(current)} <span style="font-weight:400; font-size:0.7rem;">({status_txt})</span></span></div><div class="load-bar-container"><div class="load-bar-target" style="left: {min_pct}%; width: {width_pct}%;"></div><div class="load-bar-fill" style="width: {curr_pct}%; background-color: {color}; opacity: 0.8;"></div></div></div>"""
+    
     st.markdown(draw_focus_bar("Anaerobic (Purple)", buckets['anaerobic'], targets['anaerobic']['min'], targets['anaerobic']['max'], "#8b5cf6"), unsafe_allow_html=True)
     st.markdown(draw_focus_bar("High Aerobic (Orange)", buckets['high'], targets['high']['min'], targets['high']['max'], "#f97316"), unsafe_allow_html=True)
     st.markdown(draw_focus_bar("Low Aerobic (Blue)", buckets['low'], targets['low']['min'], targets['low']['max'], "#3b82f6"), unsafe_allow_html=True)
+
+    # --- Sparklines for RHR & HRV ---
     st.divider()
     st.subheader("Recovery Trends (7 Days)")
+    
     health_logs = st.session_state.data['health_logs']
     df_health = pd.DataFrame(health_logs)
     if not df_health.empty:
@@ -723,6 +690,29 @@ def render_training_status():
             fig_hrv.update_traces(line_color='#65a30d') 
             fig_hrv.update_layout(height=200, margin=dict(l=20, r=20, t=30, b=20), xaxis_title=None, yaxis_title=None)
             st.plotly_chart(fig_hrv, use_container_width=True)
+            
+    # --- Guide Expander ---
+    with st.expander("📈 Guide: What do these numbers mean?"):
+        st.markdown("""
+        **1. Fitness (CTL - Chronic Training Load):**
+        * Your average daily training load over the last 42 days.
+        * **Goal:** Slow, steady increase. This is your "engine size."
+        
+        **2. Fatigue (ATL - Acute Training Load):**
+        * Your average load over the last 7 days.
+        * **Goal:** Spikes after hard sessions, drops during rest weeks.
+        
+        **3. Form (TSB - Training Stress Balance):**
+        * Math: `Fitness - Fatigue`
+        * **Positive (> +10):** You are fresh and ready to race (or losing fitness if prolonged).
+        * **Optimal (-10 to -30):** You are training productively.
+        * **Overload (< -30):** High risk of injury. Take a rest day!
+        
+        **4. ACWR (Acute:Chronic Workload Ratio):**
+        * Math: `Acute Load / Chronic Load`
+        * **Optimal:** 0.8 to 1.3 (Safe zone).
+        * **Danger:** > 1.5 (Spike in volume/intensity).
+        """)
 
 def render_cardio():
     st.header(":material/directions_run: Cardio Training")
@@ -918,7 +908,7 @@ def render_cardio():
                 filtered_df = filtered_df.sort_values(by='dt_obj', ascending=False)
                 for idx, row in filtered_df.iterrows():
                     zones = [float(row.get(f'z{i}', 0)) for i in range(1,6)]
-                    trimp, focus = engine.calculate_trimp(float(row['duration']), int(row['avgHr']), zones)
+                    trimp, focus = engine.calculate_trimp(float(row['duration']), int(row.get('avgHr', 0)), zones)
                     te, te_label = engine.get_training_effect(trimp)
                     
                     elev = row.get('elevation', 0)
@@ -1087,9 +1077,10 @@ def render_share():
         opt_ult = c3.checkbox("Ultimate", value=True)
         
         st.markdown("**Data Sections**")
-        c4, c6 = st.columns(2)
+        c4, c5, c6 = st.columns(3)
         opt_health = c4.checkbox("Health Logs", value=True)
-        opt_status = c6.checkbox("Training Status", value=True)
+        opt_status = c5.checkbox("Training Status", value=True)
+        opt_adv = c6.checkbox("Adv. Status (EWMA)", value=True)
         
         st.markdown("**Run Details**")
         c7, c8, c9, c10 = st.columns(4)
@@ -1117,15 +1108,9 @@ def render_share():
         st.divider()
         
         if st.button("📄 Generate Text Report", type="primary"):
-            selected_cats = []
-            if opt_run: selected_cats.append("Run")
-            if opt_walk: selected_cats.append("Walk")
-            if opt_ult: selected_cats.append("Ultimate")
-            if opt_health: selected_cats.append("Stats")
-            
             options = {
                 'run': opt_run, 'walk': opt_walk, 'ultimate': opt_ult,
-                'health': opt_health, 'status': opt_status,
+                'health': opt_health, 'status': opt_status, 'adv_status': opt_adv,
                 'det_physio': det_physio, 'det_adv': det_adv, 'det_zones': det_zones, 'det_notes': det_notes
             }
             report_text = generate_report(start_r, end_r, options)
@@ -1140,8 +1125,6 @@ def main():
 
     if selected_tab == "Training Status":
         render_training_status()
-    elif selected_tab == "Advanced Status (Beta)":
-        render_advanced_status()
     elif selected_tab == "Cardio Training":
         render_cardio()
     elif selected_tab == "Activity Calendar":
