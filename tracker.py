@@ -62,6 +62,12 @@ def setup_page():
         .cal-day-box { min-height: 80px; display: flex; flex-direction: column; justify-content: flex-start; }
         .cal-activity { font-size: 0.8rem; color: #44403c; display: flex; align-items: center; gap: 4px; margin-top: 2px; }
         .insight-box { font-size: 0.9rem; color: #57534e; background-color: #f5f5f4; padding: 12px; border-radius: 8px; margin-top: 10px; border-left: 4px solid #c2410c; }
+        
+        /* Load Bar Styles */
+        .load-bar-container { position: relative; height: 24px; background-color: #f1f5f9; border-radius: 12px; margin-bottom: 8px; margin-top: 4px; }
+        .load-bar-fill { height: 100%; border-radius: 12px; position: absolute; left: 0; top: 0; }
+        .load-bar-target { position: absolute; height: 100%; border: 2px solid #44403c; border-radius: 12px; top: 0; pointer-events: none; box-sizing: border-box; }
+        .load-label { font-size: 0.75rem; font-weight: 600; color: #78716c; margin-bottom: 2px; display: flex; justify-content: space-between; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -639,6 +645,16 @@ def render_training_status():
     c1.metric("Acute Load", int(status_data['acute']), help="7-day Load Sum")
     c2.metric("Chronic Load", int(status_data['chronic']), help="28-day Load Avg")
     c3.metric("ACWR Ratio", f"{status_data['ratio']}", help="Ratio of Acute/Chronic. Green Zone = 0.8-1.3")
+    
+    # Textual Status Indicator
+    status_color_map = {
+        "Overreaching": "background-color: #fecaca; color: #991b1b;",
+        "High Strain": "background-color: #ffedd5; color: #c2410c;",
+        "Productive": "background-color: #dcfce7; color: #166534;",
+        "Recovery": "background-color: #f5f5f4; color: #78716c;"
+    }
+    s_style = status_color_map.get(status_data['status'], "background-color: #f5f5f4; color: #78716c;")
+    st.markdown(f"""<div style="padding: 10px; border-radius: 8px; margin-top: 5px; font-weight: bold; text-align: center; {s_style}">{status_data['status']}: {status_data['desc']}</div>""", unsafe_allow_html=True)
 
     if not history_df.empty:
         fig_tunnel = go.Figure()
@@ -653,50 +669,20 @@ def render_training_status():
     buckets = status_data['buckets']
     targets = status_data['targets']
     max_scale = max(max(targets['low']['max'], buckets['low']), max(targets['high']['max'], buckets['high']), max(targets['anaerobic']['max'], buckets['anaerobic']), 1) * 1.15
-    
-    # Create Radar Chart
-    categories = ['Low Aerobic', 'High Aerobic', 'Anaerobic']
-    # Actual values
-    actual_values = [buckets['low'], buckets['high'], buckets['anaerobic']]
-    # Target values (using max as the outer edge reference)
-    target_values = [targets['low']['max'], targets['high']['max'], targets['anaerobic']['max']]
-    
-    fig_radar = go.Figure()
-    
-    # Target Trace (Background)
-    fig_radar.add_trace(go.Scatterpolar(
-        r=target_values,
-        theta=categories,
-        fill='toself',
-        name='Target Zone',
-        line=dict(color='rgba(200, 200, 200, 0.5)'),
-        fillcolor='rgba(200, 200, 200, 0.2)'
-    ))
-    
-    # Actual Trace
-    fig_radar.add_trace(go.Scatterpolar(
-        r=actual_values,
-        theta=categories,
-        fill='toself',
-        name='Current Load',
-        line=dict(color='#c2410c'), # Rust color
-        fillcolor='rgba(194, 65, 12, 0.4)'
-    ))
-    
-    fig_radar.update_layout(
-        polar=dict(
-            radialaxis=dict(visible=True, range=[0, max(max(actual_values), max(target_values)) * 1.1])
-        ),
-        showlegend=True,
-        height=350,
-        margin=dict(l=40, r=40, t=20, b=20)
-    )
-    st.plotly_chart(fig_radar, use_container_width=True)
-
-    # --- Sparklines for RHR & HRV ---
+    def draw_focus_bar(label, current, t_min, t_max, color):
+        curr_pct = min((current / max_scale) * 100, 100)
+        min_pct = min((t_min / max_scale) * 100, 100)
+        max_pct = min((t_max / max_scale) * 100, 100)
+        width_pct = max_pct - min_pct
+        if current < t_min: status_txt = "Shortage"
+        elif current > t_max: status_txt = "Over-focus"
+        else: status_txt = "Balanced"
+        return f"""<div style="margin-bottom: 12px;"><div class="load-label"><span>{label}</span> <span>{int(current)} <span style="font-weight:400; font-size:0.7rem;">({status_txt})</span></span></div><div class="load-bar-container"><div class="load-bar-target" style="left: {min_pct}%; width: {width_pct}%;"></div><div class="load-bar-fill" style="width: {curr_pct}%; background-color: {color}; opacity: 0.8;"></div></div></div>"""
+    st.markdown(draw_focus_bar("Anaerobic (Purple)", buckets['anaerobic'], targets['anaerobic']['min'], targets['anaerobic']['max'], "#8b5cf6"), unsafe_allow_html=True)
+    st.markdown(draw_focus_bar("High Aerobic (Orange)", buckets['high'], targets['high']['min'], targets['high']['max'], "#f97316"), unsafe_allow_html=True)
+    st.markdown(draw_focus_bar("Low Aerobic (Blue)", buckets['low'], targets['low']['min'], targets['low']['max'], "#3b82f6"), unsafe_allow_html=True)
     st.divider()
     st.subheader("Recovery Trends (7 Days)")
-    
     health_logs = st.session_state.data['health_logs']
     df_health = pd.DataFrame(health_logs)
     if not df_health.empty:
@@ -920,7 +906,7 @@ def render_cardio():
                 filtered_df = filtered_df.sort_values(by='dt_obj', ascending=False)
                 for idx, row in filtered_df.iterrows():
                     zones = [float(row.get(f'z{i}', 0)) for i in range(1,6)]
-                    trimp, focus = engine.calculate_trimp(float(row['duration']), int(row['avgHr']), zones)
+                    trimp, focus = engine.calculate_trimp(float(row['duration']), int(row.get('avgHr', 0)), zones)
                     te, te_label = engine.get_training_effect(trimp)
                     
                     elev = row.get('elevation', 0)
@@ -1097,7 +1083,7 @@ def render_share():
         st.markdown("**Run Details**")
         c7, c8, c9, c10 = st.columns(4)
         det_physio = c7.checkbox("Physio (HR/Load)", value=True)
-        det_adv = c8.checkbox("Advanced (Cad/Pwr/Elev)", value=True)
+        det_adv = c8.checkbox("Cadence & Power", value=True)
         det_zones = c9.checkbox("HR Zones", value=True)
         det_notes = c10.checkbox("Notes & Feel", value=True)
         
