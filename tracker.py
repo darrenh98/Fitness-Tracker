@@ -181,10 +181,12 @@ class PhysiologyEngine:
         if time_z4 > 10: return "high"
         return "low"
 
-    def calculate_trimp(self, duration_min, avg_hr=None, zones=None):
+    def calculate_trimp(self, duration_min, avg_hr=None, zones=None, rpe=None):
         load = 0.0
         focus_scores = {'low': 0, 'high': 0, 'anaerobic': 0}
-        if zones and len(self.zones) > 0:
+        
+        # 1. Zone-based Calculation (Most Accurate)
+        if zones and len(self.zones) > 0 and sum(zones) > 0:
             z1_mid = (self.hr_rest + float(self.zones.get('z1_u', 130))) / 2
             z2_mid = (float(self.zones.get('z2_l', 131)) + float(self.zones.get('z2_u', 145))) / 2
             z3_mid = (float(self.zones.get('z3_l', 146)) + float(self.zones.get('z3_u', 160))) / 2
@@ -201,6 +203,8 @@ class PhysiologyEngine:
                 if i <= 1: focus_scores['low'] += segment_load
                 elif i <= 3: focus_scores['high'] += segment_load
                 else: focus_scores['anaerobic'] += segment_load
+        
+        # 2. Avg HR Calculation (Backup)
         elif avg_hr and avg_hr > 0:
             hr_reserve = max(0.0, min(1.0, (avg_hr - self.hr_rest) / (self.hr_max - self.hr_rest)))
             exponent = 1.92 if self.gender == 'male' else 1.67
@@ -209,6 +213,18 @@ class PhysiologyEngine:
             if avg_hr > z4_upper: focus_scores['anaerobic'] = load
             elif avg_hr > z2_upper: focus_scores['high'] = load
             else: focus_scores['low'] = load
+            
+        # 3. RPE Calculation (Fallback for missing HR)
+        if load == 0 and rpe and rpe > 0:
+             # Scale: RPE (1-10) * Duration. 
+             # To align with TRIMP (approx 60-80 for 1 hr moderate), we scale RPE.
+             # e.g., 60 mins * RPE 4 = 240. 240 * 0.3 = 72 (Reasonable Z2 load)
+             load = duration_min * rpe * 0.3
+             # Estimate focus based on RPE
+             if rpe >= 8: focus_scores['anaerobic'] = load
+             elif rpe >= 6: focus_scores['high'] = load
+             else: focus_scores['low'] = load
+
         return load, focus_scores
 
     def get_daily_target(self, current_rhr, current_hrv=None, current_sleep=0):
@@ -299,7 +315,8 @@ class PhysiologyEngine:
                 if d > today: continue
                 zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
                 hr = int(r.get('avgHr', 0)) if r.get('avgHr') else 0
-                trimp, _ = self.calculate_trimp(float(r['duration']), hr, zones)
+                rpe = int(r.get('rpe', 0)) if r.get('rpe') else 0
+                trimp, _ = self.calculate_trimp(float(r['duration']), hr, zones, rpe)
                 daily_loads[d] = daily_loads.get(d, 0) + trimp
             except: continue
 
@@ -365,8 +382,6 @@ def generate_report(start_date, end_date, options):
             if r.get('avgHr') and r['avgHr'] > 0: metrics.append(f"{r['avgHr']}bpm")
             line += f" ({', '.join(metrics)})" if metrics else ""
             report.append(line)
-            
-            # Details
             details = []
             if options.get('det_physio'):
                 # Find dominant focus type for summary
@@ -416,6 +431,7 @@ def generate_report(start_date, end_date, options):
             zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
             trimp, focus = engine.calculate_trimp(float(r['duration']), int(r.get('avgHr', 0)), zones)
             h_data.append({'date': r['date'], 'load': trimp, 'focus': focus})
+        
         status = engine.calculate_training_status(h_data, reference_date=end_date)
         report.append("")
         report.append(f"STATUS (As of {end_date})")
@@ -447,8 +463,10 @@ def render_sidebar():
         st.title(":material/sprint: RunLog Hub")
         malaysia_time = get_malaysia_time()
         st.caption(f"🇲🇾 {malaysia_time.strftime('%d %b %Y, %H:%M')}")
+        
         if db: st.caption("🟢 Connected to Firestore")
         else: st.caption("🟠 Local Storage (Offline)")
+             
         selected_tab = st.radio("Navigate", ["Training Status", "Advanced Status (Beta)", "Cardio Training", "Activity Calendar", "Export"], label_visibility="collapsed")
         st.divider()
         with st.expander("👤 Athlete Profile"):
@@ -481,7 +499,8 @@ def render_sidebar():
             if st.button("Save Profile"):
                 new_prof = {
                     'weight': new_weight, 'height': new_height, 'gender': gender,
-                    'hrMax': hr_max, 'hrRest': m_rhr, 'vo2Max': vo2, 'monthAvgRHR': m_rhr, 'monthAvgHRV': m_hrv,
+                    'hrMax': hr_max, 'hrRest': m_rhr, 'vo2Max': vo2, 
+                    'monthAvgRHR': m_rhr, 'monthAvgHRV': m_hrv,
                     'zones': {"z1_u": z1_u, "z2_l": z2_l, "z2_u": z2_u, "z3_l": z3_l, "z3_u": z3_u, "z4_l": z4_l, "z4_u": z4_u, "z5_l": z5_l}
                 }
                 st.session_state.data['user_profile'].update(new_prof)
@@ -489,6 +508,8 @@ def render_sidebar():
                 else: save_data(st.session_state.data)
                 st.success("Saved!")
         return selected_tab
+
+# --- TAB RENDERERS ---
 
 def render_training_status():
     st.header(":material/monitor_heart: Training Status")
@@ -1167,12 +1188,6 @@ def render_share():
         st.divider()
         
         if st.button("📄 Generate Text Report", type="primary"):
-            selected_cats = []
-            if opt_run: selected_cats.append("Run")
-            if opt_walk: selected_cats.append("Walk")
-            if opt_ult: selected_cats.append("Ultimate")
-            if opt_health: selected_cats.append("Stats")
-            
             options = {
                 'run': opt_run, 'walk': opt_walk, 'ultimate': opt_ult,
                 'health': opt_health, 'status': opt_status, 'adv_status': opt_adv,
