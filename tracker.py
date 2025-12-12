@@ -160,6 +160,9 @@ def scroll_to_top():
     js = """<script>var body = window.parent.document.querySelector(".main"); if (body) { body.scrollTop = 0; }</script>"""
     components.html(js, height=0)
 
+def get_last_lift_stats(ex_name):
+    return None
+
 # --- Physiology Engine ---
 class PhysiologyEngine:
     def __init__(self, user_profile):
@@ -287,6 +290,34 @@ class PhysiologyEngine:
             "feedback": feedback, "history": history_series, "total_4w": total_chronic
         }
 
+    def calculate_ewma_status(self, runs, reference_date=None):
+        today = reference_date if reference_date else get_malaysia_time().date()
+        daily_loads = {}
+        for r in runs:
+            try:
+                d = datetime.strptime(r['date'], '%Y-%m-%d').date()
+                if d > today: continue
+                zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
+                hr = int(r.get('avgHr', 0)) if r.get('avgHr') else 0
+                trimp, _ = self.calculate_trimp(float(r['duration']), hr, zones)
+                daily_loads[d] = daily_loads.get(d, 0) + trimp
+            except: continue
+
+        date_range = [today - timedelta(days=x) for x in range(84)]
+        date_range.sort()
+        ewma_data = []
+        atl, ctl = 0, 0
+        k_atl, k_ctl = 2/(7+1), 2/(42+1)
+        
+        for d in date_range:
+            load = daily_loads.get(d, 0)
+            if d == date_range[0]: atl = load; ctl = load
+            else:
+                atl = (load * k_atl) + (atl * (1 - k_atl))
+                ctl = (load * k_ctl) + (ctl * (1 - k_ctl))
+            ewma_data.append({'date': d, 'load': load, 'atl': atl, 'ctl': ctl, 'tsb': ctl - atl})
+        return pd.DataFrame(ewma_data)
+
 # --- Report Generation ---
 def generate_report(start_date, end_date, options):
     report = [f"Training & Physio Report"]
@@ -327,7 +358,6 @@ def generate_report(start_date, end_date, options):
         for r in period_runs:
             zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
             trimp, focus = engine.calculate_trimp(float(r['duration']), int(r.get('avgHr', 0)), zones)
-            dom_focus = max(focus, key=focus.get) if focus else "low"
             te, te_label = engine.get_training_effect(trimp)
             line = f"- {r['date'][5:]}: {r['type']} {r['distance']}km @ {format_duration(r['duration'])}"
             metrics = []
@@ -335,28 +365,38 @@ def generate_report(start_date, end_date, options):
             if r.get('avgHr') and r['avgHr'] > 0: metrics.append(f"{r['avgHr']}bpm")
             line += f" ({', '.join(metrics)})" if metrics else ""
             report.append(line)
+            
+            # Details
             details = []
-            if options.get('det_physio'): details.append(f"Load: {int(trimp)} ({dom_focus.title()}) | TE: {te} {te_label}")
+            if options.get('det_physio'):
+                # Find dominant focus type for summary
+                focus_type = max(focus, key=focus.get) if focus else "low"
+                details.append(f"Load: {int(trimp)} ({focus_type.title()}) | TE: {te} {te_label}")
+                
             if options.get('det_adv'):
                 adv = []
                 if r.get('cadence'): adv.append(f"Cad: {r['cadence']}")
                 if r.get('power'): adv.append(f"Pwr: {r['power']}")
                 if r.get('elevation'): adv.append(f"Elev: {r['elevation']}m")
                 if adv: details.append(" | ".join(adv))
+            
             if options.get('det_zones'):
                 z_strs = []
                 for i in range(1,6):
                     val = float(r.get(f'z{i}', 0))
                     if val > 0: z_strs.append(f"Z{i}: {format_duration(val)}")
                 if z_strs: details.append(" | ".join(z_strs))
+            
             if options.get('det_notes'):
                 notes_parts = []
                 if r.get('rpe'): notes_parts.append(f"RPE: {r['rpe']}")
                 if r.get('feel'): notes_parts.append(f"Feel: {r['feel']}")
                 if r.get('notes'): notes_parts.append(f"Note: {r['notes']}")
                 if notes_parts: details.append(" | ".join(notes_parts))
+            
             if details:
-                for d in details: report.append(f"   {d}")
+                for d in details:
+                    report.append(f"   {d}")
         report.append("")
 
     if options.get('health') and period_stats:
@@ -368,6 +408,7 @@ def generate_report(start_date, end_date, options):
             daily_target = engine.get_daily_target(s.get('rhr', 0), s.get('hrv'), s.get('sleepHours', 0))
             report.append(f"- {date_str}: Sleep: {sleep_str} | RHR {s.get('rhr')} | HRV {s.get('hrv', '-')} | {daily_target['readiness']}")
     
+    # --- Status Snapshot at End of Report Period ---
     if options.get('status'):
         all_runs = st.session_state.data['runs']
         h_data = []
@@ -382,9 +423,25 @@ def generate_report(start_date, end_date, options):
         report.append(f"ACWR: {status['ratio']} (Acute: {status['acute']} / Chronic: {status['chronic']})")
         buckets = status['buckets']
         report.append(f"Focus: Low: {int(buckets['low'])} | High: {int(buckets['high'])} | Anaerobic: {int(buckets['anaerobic'])}")
+    
+    # --- Advanced Status (EWMA) ---
+    if options.get('adv_status'):
+        all_runs = st.session_state.data['runs']
+        df_ewma = engine.calculate_ewma_status(all_runs, reference_date=end_date)
+        if not df_ewma.empty:
+            current = df_ewma.iloc[-1]
+            monotony = df_ewma['load'].tail(7).mean() / df_ewma['load'].tail(7).std() if df_ewma['load'].tail(7).std() > 0 else 0
+            
+            report.append("")
+            report.append(f"ADVANCED STATUS (EWMA as of {end_date})")
+            report.append(f"Fitness (CTL): {int(current['ctl'])}")
+            report.append(f"Fatigue (ATL): {int(current['atl'])}")
+            report.append(f"Form (TSB): {int(current['tsb'])}")
+            report.append(f"Monotony (7d): {monotony:.2f}")
+
     return "\n".join(report)
 
-# --- Renderers ---
+# --- Sidebar Navigation ---
 def render_sidebar():
     with st.sidebar:
         st.title(":material/sprint: RunLog Hub")
@@ -1079,9 +1136,10 @@ def render_share():
         opt_ult = c3.checkbox("Ultimate", value=True)
         
         st.markdown("**Data Sections**")
-        c4, c6 = st.columns(2)
+        c4, c5, c6 = st.columns(3)
         opt_health = c4.checkbox("Health Logs", value=True)
-        opt_status = c6.checkbox("Training Status", value=True)
+        opt_status = c5.checkbox("Training Status", value=True)
+        opt_adv = c6.checkbox("Adv. Status (EWMA)", value=True)
         
         st.markdown("**Run Details**")
         c7, c8, c9, c10 = st.columns(4)
@@ -1117,7 +1175,7 @@ def render_share():
             
             options = {
                 'run': opt_run, 'walk': opt_walk, 'ultimate': opt_ult,
-                'health': opt_health, 'status': opt_status,
+                'health': opt_health, 'status': opt_status, 'adv_status': opt_adv,
                 'det_physio': det_physio, 'det_adv': det_adv, 'det_zones': det_zones, 'det_notes': det_notes
             }
             report_text = generate_report(start_r, end_r, options)
