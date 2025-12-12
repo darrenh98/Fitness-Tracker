@@ -184,8 +184,6 @@ class PhysiologyEngine:
     def calculate_trimp(self, duration_min, avg_hr=None, zones=None, rpe=None):
         load = 0.0
         focus_scores = {'low': 0, 'high': 0, 'anaerobic': 0}
-        
-        # 1. Zone-based Calculation (Most Accurate)
         if zones and len(self.zones) > 0 and sum(zones) > 0:
             z1_mid = (self.hr_rest + float(self.zones.get('z1_u', 130))) / 2
             z2_mid = (float(self.zones.get('z2_l', 131)) + float(self.zones.get('z2_u', 145))) / 2
@@ -203,8 +201,6 @@ class PhysiologyEngine:
                 if i <= 1: focus_scores['low'] += segment_load
                 elif i <= 3: focus_scores['high'] += segment_load
                 else: focus_scores['anaerobic'] += segment_load
-        
-        # 2. Avg HR Calculation (Backup)
         elif avg_hr and avg_hr > 0:
             hr_reserve = max(0.0, min(1.0, (avg_hr - self.hr_rest) / (self.hr_max - self.hr_rest)))
             exponent = 1.92 if self.gender == 'male' else 1.67
@@ -213,8 +209,8 @@ class PhysiologyEngine:
             if avg_hr > z4_upper: focus_scores['anaerobic'] = load
             elif avg_hr > z2_upper: focus_scores['high'] = load
             else: focus_scores['low'] = load
-            
-        # 3. RPE Calculation (Fallback for missing HR)
+        
+        # RPE fallback
         if load == 0 and rpe and rpe > 0:
              load = duration_min * rpe * 0.3
              if rpe >= 8: focus_scores['anaerobic'] = load
@@ -503,9 +499,14 @@ def render_advanced_status():
 
     # --- Graph ---
     st.divider()
+    
+    # Slice to show only last 6 weeks (42 days) for better readability, 
+    # even though we calculated over 12 weeks for stability.
+    df_chart = df_ewma.tail(42) 
+    
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df_ewma['date'], y=df_ewma['ctl'], fill='tozeroy', name='Fitness (CTL)', line=dict(color='rgba(34, 197, 94, 0.5)')))
-    fig.add_trace(go.Scatter(x=df_ewma['date'], y=df_ewma['atl'], name='Fatigue (ATL)', line=dict(color='#be123c')))
+    fig.add_trace(go.Scatter(x=df_chart['date'], y=df_chart['ctl'], fill='tozeroy', name='Fitness (CTL)', line=dict(color='rgba(34, 197, 94, 0.5)')))
+    fig.add_trace(go.Scatter(x=df_chart['date'], y=df_chart['atl'], name='Fatigue (ATL)', line=dict(color='#be123c')))
     fig.update_layout(title="Performance Management Chart (EWMA)", height=350, margin=dict(l=20,r=20,t=40,b=20), hovermode="x unified")
     st.plotly_chart(fig, use_container_width=True)
     
@@ -595,6 +596,8 @@ def render_sidebar():
                 else: save_data(st.session_state.data)
                 st.success("Saved!")
         return selected_tab
+
+# --- TAB RENDERERS ---
 
 def render_training_status():
     st.header(":material/monitor_heart: Training Status")
