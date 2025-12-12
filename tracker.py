@@ -621,7 +621,18 @@ def render_training_status():
     st.subheader("Workload Ratio (ACWR)")
     
     # Calculate for processing
-    status_data = engine.calculate_training_status(runs) # Returns the data dict
+    processed_runs = []
+    for r in runs:
+        try:
+            zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
+            hr = int(r.get('avgHr', 0)) if r.get('avgHr') else 0
+            rpe = int(r.get('rpe', 0)) if r.get('rpe') else 0
+            duration = float(r.get('duration', 0))
+            trimp, focus = engine.calculate_trimp(duration, hr, zones, rpe)
+            processed_runs.append({'date': r['date'], 'load': trimp, 'focus': focus})
+        except: continue
+
+    status_data = engine.calculate_training_status(processed_runs)
     history_df = pd.DataFrame(status_data['history'])
 
     c1, c2, c3 = st.columns(3)
