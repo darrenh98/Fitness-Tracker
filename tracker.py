@@ -59,7 +59,8 @@ def setup_page():
         .target-load { font-size: 1.2rem; font-weight: 700; color: #c2410c; margin: 0.5rem 0; }
         .bio-row { display: flex; justify-content: space-between; font-size: 0.85rem; color: #57534e; border-top: 1px solid #f5f5f4; padding-top: 8px; margin-top: 8px; }
         .bio-item { display: flex; align-items: center; gap: 4px; }
-        .insight-box { font-size: 0.9rem; color: #57534e; background-color: #f5f5f4; padding: 10px; border-radius: 8px; margin-top: 5px; }
+        .cal-day-box { min-height: 80px; display: flex; flex-direction: column; justify-content: flex-start; }
+        .cal-activity { font-size: 0.8rem; color: #44403c; display: flex; align-items: center; gap: 4px; margin-top: 2px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -217,22 +218,13 @@ class PhysiologyEngine:
             return {"readiness": "Moderate", "recommendation": "Steady State", "target_load": "Maintenance (e.g., Z2)", "message": "Train, but keep controlled.", "color": "#ea580c", "bg": "#ffedd5", "rhr_stat": "Normal", "hrv_stat": "Normal", "sleep_stat": "Normal"}
     
     def get_dynamic_daily_target(self, current_rhr, current_hrv, avg_7d_rhr, avg_7d_hrv):
-        """Advanced Dynamic Readiness based on rolling averages"""
-        if not avg_7d_rhr or not avg_7d_hrv:
-            return self.get_daily_target(current_rhr, current_hrv) # Fallback
-            
-        rhr_z = current_rhr - avg_7d_rhr
-        hrv_z = current_hrv - avg_7d_hrv
-        
+        if not avg_7d_rhr or not avg_7d_hrv: return self.get_daily_target(current_rhr, current_hrv)
+        rhr_z = current_rhr - avg_7d_rhr; hrv_z = current_hrv - avg_7d_hrv
         is_fatigued = (rhr_z > 3) or (hrv_z < -10)
         is_prime = (rhr_z < -2) and (hrv_z > -5)
-        
-        if is_fatigued:
-             return {"readiness": "Low", "recommendation": "Recovery / Rest", "target_load": "Light (<40)", "message": f"Fatigue detected vs 7-day trend (RHR +{rhr_z:.1f})", "color": "#be123c", "bg": "#fee2e2"}
-        elif is_prime:
-             return {"readiness": "High", "recommendation": "Intervals / Tempo", "target_load": "Heavy (>120)", "message": "Primed. Stats better than recent avg.", "color": "#65a30d", "bg": "#dcfce7"}
-        else:
-             return {"readiness": "Moderate", "recommendation": "Base / Aerobic", "target_load": "Normal (60-100)", "message": "Stable. Maintain volume.", "color": "#ea580c", "bg": "#ffedd5"}
+        if is_fatigued: return {"readiness": "Low", "recommendation": "Recovery / Rest", "target_load": "Light (<40)", "message": f"Fatigue detected vs 7-day trend (RHR +{rhr_z:.1f})", "color": "#be123c", "bg": "#fee2e2"}
+        elif is_prime: return {"readiness": "High", "recommendation": "Intervals / Tempo", "target_load": "Heavy (>120)", "message": "Primed. Stats better than recent avg.", "color": "#65a30d", "bg": "#dcfce7"}
+        else: return {"readiness": "Moderate", "recommendation": "Base / Aerobic", "target_load": "Normal (60-100)", "message": "Stable. Maintain volume.", "color": "#ea580c", "bg": "#ffedd5"}
 
     def get_training_effect(self, trimp_score):
         scaling = self.vo2_max * 1.5
@@ -305,61 +297,76 @@ def generate_report(start_date, end_date, options):
     if options.get('walk'): field_types.append('Walk')
     if options.get('ultimate'): field_types.append('Ultimate')
     
-    if field_types:
-        runs = st.session_state.data['runs']
-        period_runs = [r for r in runs if start_date <= datetime.strptime(r['date'], '%Y-%m-%d').date() <= end_date and r['type'] in field_types]
+    # 1. Summary Header
+    runs = st.session_state.data['runs']
+    stats = st.session_state.data['health_logs']
+    
+    period_runs = [r for r in runs if start_date <= datetime.strptime(r['date'], '%Y-%m-%d').date() <= end_date and r['type'] in field_types]
+    period_stats = [s for s in stats if start_date <= datetime.strptime(s['date'], '%Y-%m-%d').date() <= end_date]
+    
+    total_dist = sum(r['distance'] for r in period_runs) if period_runs else 0
+    total_time = sum(r['duration'] for r in period_runs) if period_runs else 0
+    total_elev = sum(r.get('elevation', 0) for r in period_runs) if period_runs else 0
+    avg_rhr = sum(s.get('rhr', 0) for s in period_stats) / len(period_stats) if period_stats else 0
+    avg_hrv = sum(s.get('hrv', 0) for s in period_stats) / len(period_stats) if period_stats else 0
+    avg_sleep = sum(s.get('sleepHours', 0) for s in period_stats) / len(period_stats) if period_stats else 0
+    
+    report.append("-" * 40)
+    report.append(f"Total Dist: {total_dist:.1f} km")
+    report.append(f"Total Time: {format_duration(total_time)}")
+    report.append(f"Total Elev: {total_elev} m")
+    if avg_rhr: report.append(f"Avg RHR: {int(avg_rhr)} bpm")
+    if avg_hrv: report.append(f"Avg HRV: {int(avg_hrv)} ms")
+    if avg_sleep: report.append(f"Avg Sleep: {format_sleep(avg_sleep)}")
+    report.append("-" * 40)
+    report.append("")
+    
+    if field_types and period_runs:
+        report.append(f"ACTIVITIES ({len(period_runs)})")
         period_runs.sort(key=lambda x: x['date'])
-        if period_runs:
-            total_dist = sum(r['distance'] for r in period_runs)
-            total_time = sum(r['duration'] for r in period_runs)
-            report.append(f"ACTIVITIES ({len(period_runs)})")
-            report.append(f"Totals: {total_dist:.1f} km | {format_duration(total_time)}")
-            report.append("")
-            for r in period_runs:
-                zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
-                trimp, focus = engine.calculate_trimp(float(r['duration']), int(r.get('avgHr', 0)), zones)
-                te, te_label = engine.get_training_effect(trimp)
-                line = f"- {r['date'][5:]}: {r['type']} {r['distance']}km @ {format_duration(r['duration'])}"
-                metrics = []
-                if r['distance'] > 0 and r['type'] != 'Ultimate': metrics.append(f"{format_pace(r['duration']/r['distance'])}/km")
-                if r.get('avgHr') and r['avgHr'] > 0: metrics.append(f"{r['avgHr']}bpm")
-                line += f" ({', '.join(metrics)})" if metrics else ""
-                report.append(line)
-                details = []
-                if options.get('det_physio'): details.append(f"Load: {int(trimp)} | TE: {te} {te_label}")
-                if options.get('det_adv'):
-                    adv = []
-                    if r.get('cadence'): adv.append(f"Cad: {r['cadence']}")
-                    if r.get('power'): adv.append(f"Pwr: {r['power']}")
-                    if r.get('elevation'): adv.append(f"Elev: {r['elevation']}m")
-                    if adv: details.append(" | ".join(adv))
-                if options.get('det_zones'):
-                    z_strs = []
-                    for i in range(1,6):
-                        val = float(r.get(f'z{i}', 0))
-                        if val > 0: z_strs.append(f"Z{i}: {format_duration(val)}")
-                    if z_strs: details.append(" | ".join(z_strs))
-                if options.get('det_notes'):
-                    notes_parts = []
-                    if r.get('rpe'): notes_parts.append(f"RPE: {r['rpe']}")
-                    if r.get('feel'): notes_parts.append(f"Feel: {r['feel']}")
-                    if r.get('notes'): notes_parts.append(f"Note: {r['notes']}")
-                    if notes_parts: details.append(" | ".join(notes_parts))
-                if details:
-                    for d in details: report.append(f"   {d}")
-            report.append("")
+        for r in period_runs:
+            zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
+            trimp, focus = engine.calculate_trimp(float(r['duration']), int(r.get('avgHr', 0)), zones)
+            dom_focus = max(focus, key=focus.get) if focus else "low"
+            te, te_label = engine.get_training_effect(trimp)
+            line = f"- {r['date'][5:]}: {r['type']} {r['distance']}km @ {format_duration(r['duration'])}"
+            metrics = []
+            if r['distance'] > 0 and r['type'] != 'Ultimate': metrics.append(f"{format_pace(r['duration']/r['distance'])}/km")
+            if r.get('avgHr') and r['avgHr'] > 0: metrics.append(f"{r['avgHr']}bpm")
+            line += f" ({', '.join(metrics)})" if metrics else ""
+            report.append(line)
+            details = []
+            if options.get('det_physio'): details.append(f"Load: {int(trimp)} ({dom_focus.title()}) | TE: {te} {te_label}")
+            if options.get('det_adv'):
+                adv = []
+                if r.get('cadence'): adv.append(f"Cad: {r['cadence']}")
+                if r.get('power'): adv.append(f"Pwr: {r['power']}")
+                if r.get('elevation'): adv.append(f"Elev: {r['elevation']}m")
+                if adv: details.append(" | ".join(adv))
+            if options.get('det_zones'):
+                z_strs = []
+                for i in range(1,6):
+                    val = float(r.get(f'z{i}', 0))
+                    if val > 0: z_strs.append(f"Z{i}: {format_duration(val)}")
+                if z_strs: details.append(" | ".join(z_strs))
+            if options.get('det_notes'):
+                notes_parts = []
+                if r.get('rpe'): notes_parts.append(f"RPE: {r['rpe']}")
+                if r.get('feel'): notes_parts.append(f"Feel: {r['feel']}")
+                if r.get('notes'): notes_parts.append(f"Note: {r['notes']}")
+                if notes_parts: details.append(" | ".join(notes_parts))
+            if details:
+                for d in details: report.append(f"   {d}")
+        report.append("")
 
-    if options.get('health'):
-        stats = st.session_state.data['health_logs']
-        period_stats = [s for s in stats if start_date <= datetime.strptime(s['date'], '%Y-%m-%d').date() <= end_date]
+    if options.get('health') and period_stats:
+        report.append(f"HEALTH LOG")
         period_stats.sort(key=lambda x: x['date'])
-        if period_stats:
-            report.append(f"HEALTH LOG")
-            for s in period_stats:
-                date_str = s['date'][5:]
-                sleep_str = format_sleep(s.get('sleepHours', 0))
-                daily_target = engine.get_daily_target(s.get('rhr', 0), s.get('hrv'), s.get('sleepHours', 0))
-                report.append(f"- {date_str}: Sleep: {sleep_str} | RHR {s.get('rhr')} | HRV {s.get('hrv', '-')} | {daily_target['readiness']}")
+        for s in period_stats:
+            date_str = s['date'][5:]
+            sleep_str = format_sleep(s.get('sleepHours', 0))
+            daily_target = engine.get_daily_target(s.get('rhr', 0), s.get('hrv'), s.get('sleepHours', 0))
+            report.append(f"- {date_str}: Sleep: {sleep_str} | RHR {s.get('rhr')} | HRV {s.get('hrv', '-')} | {daily_target['readiness']}")
     
     if options.get('status'):
         all_runs = st.session_state.data['runs']
