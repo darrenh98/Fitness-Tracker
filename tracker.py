@@ -59,6 +59,7 @@ def setup_page():
         .target-load { font-size: 1.2rem; font-weight: 700; color: #c2410c; margin: 0.5rem 0; }
         .bio-row { display: flex; justify-content: space-between; font-size: 0.85rem; color: #57534e; border-top: 1px solid #f5f5f4; padding-top: 8px; margin-top: 8px; }
         .bio-item { display: flex; align-items: center; gap: 4px; }
+        .insight-box { font-size: 0.9rem; color: #57534e; background-color: #f5f5f4; padding: 10px; border-radius: 8px; margin-top: 5px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -223,7 +224,6 @@ class PhysiologyEngine:
         rhr_z = current_rhr - avg_7d_rhr
         hrv_z = current_hrv - avg_7d_hrv
         
-        # Logic: If RHR is > 3bpm above 7d avg OR HRV is > 10ms below 7d avg -> Fatigue
         is_fatigued = (rhr_z > 3) or (hrv_z < -10)
         is_prime = (rhr_z < -2) and (hrv_z > -5)
         
@@ -555,10 +555,6 @@ def render_advanced_status():
     st.header(":material/science: Advanced Status (Beta)")
     setup_page()
     
-    # 1. EWMA Calculation Logic (More robust smoothing)
-    # 2. Dynamic Baseline for Readiness
-    # 3. Monotony Index
-    
     runs = st.session_state.data['runs']
     health = st.session_state.data['health_logs']
     
@@ -620,18 +616,55 @@ def render_advanced_status():
     # --- UI: Top Level Metrics ---
     st.subheader("EWMA Training Status")
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Fitness (CTL)", f"{int(current['ctl'])}")
-    c2.metric("Fatigue (ATL)", f"{int(current['atl'])}")
-    c3.metric("Form (TSB)", f"{int(current['tsb'])}")
-    monotony = df_ewma['load'].tail(7).mean() / df_ewma['load'].tail(7).std() if df_ewma['load'].tail(7).std() > 0 else 0
-    c4.metric("Monotony", f"{monotony:.1f}", help=">2.0 indicates high risk")
     
+    # Calculate Deltas (Today vs 7 days ago)
+    past_7d = df_ewma.iloc[-8] if len(df_ewma) > 7 else df_ewma.iloc[0]
+    
+    d_ctl = int(current['ctl'] - past_7d['ctl'])
+    d_atl = int(current['atl'] - past_7d['atl'])
+    d_tsb = int(current['tsb'] - past_7d['tsb'])
+    
+    c1.metric("Fitness (CTL)", f"{int(current['ctl'])}", f"{d_ctl}", help="Chronic Training Load (42-day avg). Measures fitness.")
+    c2.metric("Fatigue (ATL)", f"{int(current['atl'])}", f"{d_atl}", delta_color="inverse", help="Acute Training Load (7-day avg). Measures tiredness.")
+    c3.metric("Form (TSB)", f"{int(current['tsb'])}", f"{d_tsb}", help="Training Stress Balance (Fitness - Fatigue). Positive = Fresh.")
+    
+    monotony = df_ewma['load'].tail(7).mean() / df_ewma['load'].tail(7).std() if df_ewma['load'].tail(7).std() > 0 else 0
+    c4.metric("Monotony", f"{monotony:.1f}", help=">2.0 indicates high injury risk due to lack of variation.")
+    
+    # --- INSIGHT CARDS ---
+    st.write("") # Spacer
+    
+    # Fitness Insight
+    fit_trend = "Maintaining"
+    if d_ctl > 2: fit_trend = "Building"
+    elif d_ctl < -2: fit_trend = "Declining"
+    
+    st.info(f"**Fitness (CTL): {fit_trend}**\n\nYour fitness is {fit_trend.lower()} ({d_ctl} change over 7 days). " + 
+            ("Great job building volume!" if d_ctl > 0 else "You might be tapering or recovering."))
+
+    # Fatigue Insight
+    if current['atl'] > current['ctl'] * 1.3:
+         st.warning(f"**High Fatigue Warning**\n\nYour acute load ({int(current['atl'])}) is significantly higher than your fitness ({int(current['ctl'])}). Risk of overuse injury.")
+
+    # Form Insight (The most actionable one)
+    tsb = current['tsb']
+    if tsb < -30:
+        st.error(f"**Form: Overload Warning ({int(tsb)})**\n\nYou are in the 'High Risk' zone. Your fatigue is excessive compared to your fitness. Rest is highly recommended.")
+    elif -30 <= tsb < -10:
+        st.success(f"**Form: Optimal Training ({int(tsb)})**\n\nYou are in the 'Productive' zone. Accumulating fatigue at a sustainable rate to build fitness.")
+    elif -10 <= tsb < 10:
+        st.info(f"**Form: Neutral / Fresh ({int(tsb)})**\n\nYou are in the 'Transition' zone. Good for maintenance or race week tapering.")
+    elif tsb >= 10:
+        st.warning(f"**Form: Detraining Warning ({int(tsb)})**\n\nYou are very fresh, but likely losing fitness. If not tapering for a race, increase training load.")
+
     # --- Graph: Advanced PMC (Performance Management Chart) ---
+    st.divider()
     fig = go.Figure()
     # Chronic Load (Fitness) - Area
     fig.add_trace(go.Scatter(x=df_ewma['date'], y=df_ewma['ctl'], fill='tozeroy', name='Fitness (CTL)', line=dict(color='rgba(34, 197, 94, 0.5)')))
     # Acute Load (Fatigue) - Line
     fig.add_trace(go.Scatter(x=df_ewma['date'], y=df_ewma['atl'], name='Fatigue (ATL)', line=dict(color='#be123c')))
+    # Form (TSB) - Bar/Line? Usually area or separate. Let's keep it clean with just CTL/ATL for now as main focus.
     
     fig.update_layout(title="Performance Management Chart (EWMA)", height=350, margin=dict(l=20,r=20,t=40,b=20), hovermode="x unified")
     st.plotly_chart(fig, use_container_width=True)
@@ -691,6 +724,8 @@ def render_cardio():
     def_dist, def_dur, def_hr, def_cad, def_pwr, def_elev = 0.0, 0.0, 0, 0, 0, 0
     def_notes, def_feel, def_rpe = "", "Normal", 5
     def_z1, def_z2, def_z3, def_z4, def_z5 = "", "", "", "", ""
+    def_shoe = "Default Shoe"
+    
     if edit_run_id:
         run_data = next((r for r in st.session_state.data['runs'] if str(r['id']) == str(edit_run_id)), None)
         if run_data:
@@ -702,6 +737,7 @@ def render_cardio():
             def_cad = run_data.get('cadence', 0)
             def_pwr = run_data.get('power', 0)
             def_elev = run_data.get('elevation', 0)
+            def_shoe = run_data.get('shoe_id', 'Default Shoe')
             def_notes = run_data.get('notes', '')
             def_feel = run_data.get('feel', 'Normal')
             def_rpe = run_data.get('rpe', 5)
@@ -752,7 +788,7 @@ def render_cardio():
                 st.caption("Elevation (m)")
                 elev = st.number_input("Elevation", min_value=0, value=int(def_elev), label_visibility="collapsed", key=f"elev_{key_suffix}")
             with c_g2:
-                st.write("") 
+                st.write("") # Spacer since shoes are removed
 
             st.caption("Heart Rate Zones (Time in mm:ss)")
             rc1, rc2, rc3, rc4, rc5 = st.columns(5)
@@ -867,7 +903,7 @@ def render_cardio():
                 filtered_df = filtered_df.sort_values(by='dt_obj', ascending=False)
                 for idx, row in filtered_df.iterrows():
                     zones = [float(row.get(f'z{i}', 0)) for i in range(1,6)]
-                    trimp, focus = engine.calculate_trimp(float(row['duration']), int(row.get('avgHr', 0)), zones)
+                    trimp, focus = engine.calculate_trimp(float(row['duration']), int(row['avgHr']), zones)
                     te, te_label = engine.get_training_effect(trimp)
                     
                     elev = row.get('elevation', 0)
