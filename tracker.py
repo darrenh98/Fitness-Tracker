@@ -447,7 +447,7 @@ def render_sidebar():
         st.caption(f"🇲🇾 {malaysia_time.strftime('%d %b %Y, %H:%M')}")
         if db: st.caption("🟢 Connected to Firestore")
         else: st.caption("🟠 Local Storage (Offline)")
-        selected_tab = st.radio("Navigate", ["Training Status", "Cardio Training", "Activity Calendar", "Export"], label_visibility="collapsed")
+        selected_tab = st.radio("Navigate", ["Training Status", "Advanced Status (Beta)", "Cardio Training", "Activity Calendar", "Export"], label_visibility="collapsed")
         st.divider()
         with st.expander("👤 Athlete Profile"):
             prof = st.session_state.data['user_profile']
@@ -652,12 +652,13 @@ def render_training_status():
     st.subheader("Load Focus (4 weeks)")
     buckets = status_data['buckets']
     targets = status_data['targets']
-    max_scale = max(targets['low']['max'], buckets['low'], 1) * 1.2
+    max_scale = max(max(targets['low']['max'], buckets['low']), max(targets['high']['max'], buckets['high']), max(targets['anaerobic']['max'], buckets['anaerobic']), 1) * 1.15
     def draw_focus_bar(label, current, t_min, t_max, color):
         curr_pct = min((current / max_scale) * 100, 100)
         min_pct = min((t_min / max_scale) * 100, 100)
         max_pct = min((t_max / max_scale) * 100, 100)
         width_pct = max_pct - min_pct
+        if width_pct < 2: width_pct = 2
         if current < t_min: status_txt = "Shortage"
         elif current > t_max: status_txt = "Over-focus"
         else: status_txt = "Balanced"
@@ -890,7 +891,7 @@ def render_cardio():
                 filtered_df = filtered_df.sort_values(by='dt_obj', ascending=False)
                 for idx, row in filtered_df.iterrows():
                     zones = [float(row.get(f'z{i}', 0)) for i in range(1,6)]
-                    trimp, focus = engine.calculate_trimp(float(row['duration']), int(row.get('avgHr', 0)), zones)
+                    trimp, focus = engine.calculate_trimp(float(row['duration']), int(row['avgHr']), zones)
                     te, te_label = engine.get_training_effect(trimp)
                     
                     elev = row.get('elevation', 0)
