@@ -216,11 +216,7 @@ class PhysiologyEngine:
             
         # 3. RPE Calculation (Fallback for missing HR)
         if load == 0 and rpe and rpe > 0:
-             # Scale: RPE (1-10) * Duration. 
-             # To align with TRIMP (approx 60-80 for 1 hr moderate), we scale RPE.
-             # e.g., 60 mins * RPE 4 = 240. 240 * 0.3 = 72 (Reasonable Z2 load)
              load = duration_min * rpe * 0.3
-             # Estimate focus based on RPE
              if rpe >= 8: focus_scores['anaerobic'] = load
              elif rpe >= 6: focus_scores['high'] = load
              else: focus_scores['low'] = load
@@ -457,16 +453,107 @@ def generate_report(start_date, end_date, options):
 
     return "\n".join(report)
 
-# --- Sidebar Navigation ---
+# --- Renderers ---
+
+def render_advanced_status():
+    st.header(":material/science: Advanced Status (Beta)")
+    setup_page()
+    
+    runs = st.session_state.data['runs']
+    health = st.session_state.data['health_logs']
+    
+    if not runs:
+        st.info("Log more activities to see advanced status.")
+        return
+
+    # --- EWMA Calculation ---
+    engine = PhysiologyEngine(st.session_state.data['user_profile'])
+    df_ewma = engine.calculate_ewma_status(runs)
+    current = df_ewma.iloc[-1]
+    
+    # --- UI: Top Level Metrics ---
+    st.subheader("EWMA Training Status")
+    c1, c2, c3, c4 = st.columns(4)
+    
+    # Calculate Deltas
+    past_7d = df_ewma.iloc[-8] if len(df_ewma) > 7 else df_ewma.iloc[0]
+    d_ctl = int(current['ctl'] - past_7d['ctl'])
+    d_atl = int(current['atl'] - past_7d['atl'])
+    d_tsb = int(current['tsb'] - past_7d['tsb'])
+    
+    c1.metric("Fitness (CTL)", f"{int(current['ctl'])}", f"{d_ctl}", help="Chronic Training Load (42-day avg)")
+    c2.metric("Fatigue (ATL)", f"{int(current['atl'])}", f"{d_atl}", delta_color="inverse", help="Acute Training Load (7-day avg)")
+    c3.metric("Form (TSB)", f"{int(current['tsb'])}", f"{d_tsb}", help="Training Stress Balance")
+    
+    monotony = df_ewma['load'].tail(7).mean() / df_ewma['load'].tail(7).std() if df_ewma['load'].tail(7).std() > 0 else 0
+    c4.metric("Monotony", f"{monotony:.1f}", help=">2.0 indicates high injury risk")
+    
+    # --- Insight Cards ---
+    st.write("")
+    
+    tsb = current['tsb']
+    if tsb < -30:
+        st.error(f"**Form: Overload Warning ({int(tsb)})**\n\nHigh Risk zone. Fatigue excessive. Rest recommended.")
+    elif -30 <= tsb < -10:
+        st.success(f"**Form: Optimal Training ({int(tsb)})**\n\nProductive zone. Building fitness sustainably.")
+    elif -10 <= tsb < 10:
+        st.info(f"**Form: Neutral / Fresh ({int(tsb)})**\n\nTransition zone. Good for maintenance or tapering.")
+    elif tsb >= 10:
+        st.warning(f"**Form: Detraining Warning ({int(tsb)})**\n\nVery fresh. Likely losing fitness if not tapering.")
+
+    # --- Graph ---
+    st.divider()
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df_ewma['date'], y=df_ewma['ctl'], fill='tozeroy', name='Fitness (CTL)', line=dict(color='rgba(34, 197, 94, 0.5)')))
+    fig.add_trace(go.Scatter(x=df_ewma['date'], y=df_ewma['atl'], name='Fatigue (ATL)', line=dict(color='#be123c')))
+    fig.update_layout(title="Performance Management Chart (EWMA)", height=350, margin=dict(l=20,r=20,t=40,b=20), hovermode="x unified")
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # --- Dynamic Readiness ---
+    st.divider()
+    st.subheader("Dynamic Readiness (Rolling Baseline)")
+    
+    today = get_malaysia_time().date()
+    if len(health) < 7:
+        st.warning("Need at least 7 days of health logs for dynamic baselines.")
+    else:
+        df_h = pd.DataFrame(health)
+        df_h['date'] = pd.to_datetime(df_h['date']).dt.date
+        df_h = df_h.sort_values('date')
+        
+        baseline_window = df_h[df_h['date'] < today].tail(7)
+        if not baseline_window.empty:
+            avg_rhr_7d = baseline_window['rhr'].mean()
+            avg_hrv_7d = baseline_window['hrv'].mean()
+            
+            today_log = df_h[df_h['date'] == today]
+            if not today_log.empty:
+                curr_rhr = today_log.iloc[0]['rhr']
+                curr_hrv = today_log.iloc[0]['hrv']
+                target = engine.get_dynamic_daily_target(curr_rhr, curr_hrv, avg_rhr_7d, avg_7d_hrv=avg_hrv_7d)
+                
+                st.markdown(f"""
+                <div style="background-color: {target['bg']}; padding: 1.5rem; border-radius: 12px; border: 1px solid {target['color']};">
+                    <h3 style="color: {target['color']}; margin:0;">{target['readiness']} Readiness</h3>
+                    <p style="font-weight: bold; margin: 5px 0;">{target['recommendation']}</p>
+                    <p>{target['message']}</p>
+                    <hr style="margin: 10px 0; border-color: {target['color']}; opacity: 0.3;">
+                    <div style="display: flex; justify-content: space-between; font-size: 0.9rem;">
+                        <span><b>Baseline RHR:</b> {avg_rhr_7d:.1f}</span>
+                        <span><b>Baseline HRV:</b> {avg_hrv_7d:.1f}</span>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.info("Log today's health stats to see dynamic readiness.")
+
 def render_sidebar():
     with st.sidebar:
         st.title(":material/sprint: RunLog Hub")
         malaysia_time = get_malaysia_time()
         st.caption(f"🇲🇾 {malaysia_time.strftime('%d %b %Y, %H:%M')}")
-        
         if db: st.caption("🟢 Connected to Firestore")
         else: st.caption("🟠 Local Storage (Offline)")
-             
         selected_tab = st.radio("Navigate", ["Training Status", "Advanced Status (Beta)", "Cardio Training", "Activity Calendar", "Export"], label_visibility="collapsed")
         st.divider()
         with st.expander("👤 Athlete Profile"):
@@ -508,8 +595,6 @@ def render_sidebar():
                 else: save_data(st.session_state.data)
                 st.success("Saved!")
         return selected_tab
-
-# --- TAB RENDERERS ---
 
 def render_training_status():
     st.header(":material/monitor_heart: Training Status")
@@ -635,164 +720,6 @@ def render_training_status():
             fig_hrv.update_traces(line_color='#65a30d') 
             fig_hrv.update_layout(height=200, margin=dict(l=20, r=20, t=30, b=20), xaxis_title=None, yaxis_title=None)
             st.plotly_chart(fig_hrv, use_container_width=True)
-
-def render_advanced_status():
-    st.header(":material/science: Advanced Status (Beta)")
-    setup_page()
-    
-    runs = st.session_state.data['runs']
-    health = st.session_state.data['health_logs']
-    
-    if not runs:
-        st.info("Log more activities to see advanced status.")
-        return
-
-    # --- Prepare DataFrames ---
-    df_runs = pd.DataFrame(runs)
-    df_runs['date'] = pd.to_datetime(df_runs['date']).dt.date
-    
-    # Calculate Load per day
-    engine = PhysiologyEngine(st.session_state.data['user_profile'])
-    daily_loads = {}
-    
-    for r in runs:
-        d = datetime.strptime(r['date'], '%Y-%m-%d').date()
-        zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
-        trimp, _ = engine.calculate_trimp(float(r['duration']), int(r['avgHr']), zones)
-        daily_loads[d] = daily_loads.get(d, 0) + trimp
-        
-    # Fill missing days for EWMA accuracy
-    today = get_malaysia_time().date()
-    date_range = [today - timedelta(days=x) for x in range(42)] # 6 weeks
-    date_range.sort()
-    
-    ewma_data = []
-    atl = 0 # Acute Training Load
-    ctl = 0 # Chronic Training Load
-    
-    # Decay factors (Standard TrainingPeaks constants)
-    tau_atl = 7
-    tau_ctl = 42
-    k_atl = 2 / (tau_atl + 1)
-    k_ctl = 2 / (tau_ctl + 1)
-    
-    # Iterate to build EWMA
-    for d in date_range:
-        load = daily_loads.get(d, 0)
-        # EWMA Formula: EMA_today = (Load * k) + (EMA_yesterday * (1-k))
-        if d == date_range[0]: # Init
-            atl = load
-            ctl = load
-        else:
-            atl = (load * k_atl) + (atl * (1 - k_atl))
-            ctl = (load * k_ctl) + (ctl * (1 - k_ctl))
-            
-        ewma_data.append({
-            'date': d,
-            'load': load,
-            'atl': atl,
-            'ctl': ctl,
-            'tsb': ctl - atl # Training Stress Balance
-        })
-    
-    df_ewma = pd.DataFrame(ewma_data)
-    current = df_ewma.iloc[-1]
-    
-    # --- UI: Top Level Metrics ---
-    st.subheader("EWMA Training Status")
-    c1, c2, c3, c4 = st.columns(4)
-    
-    # Calculate Deltas (Today vs 7 days ago)
-    past_7d = df_ewma.iloc[-8] if len(df_ewma) > 7 else df_ewma.iloc[0]
-    
-    d_ctl = int(current['ctl'] - past_7d['ctl'])
-    d_atl = int(current['atl'] - past_7d['atl'])
-    d_tsb = int(current['tsb'] - past_7d['tsb'])
-    
-    c1.metric("Fitness (CTL)", f"{int(current['ctl'])}", f"{d_ctl}", help="Chronic Training Load (42-day avg). Measures fitness.")
-    c2.metric("Fatigue (ATL)", f"{int(current['atl'])}", f"{d_atl}", delta_color="inverse", help="Acute Training Load (7-day avg). Measures tiredness.")
-    c3.metric("Form (TSB)", f"{int(current['tsb'])}", f"{d_tsb}", help="Training Stress Balance (Fitness - Fatigue). Positive = Fresh.")
-    
-    monotony = df_ewma['load'].tail(7).mean() / df_ewma['load'].tail(7).std() if df_ewma['load'].tail(7).std() > 0 else 0
-    c4.metric("Monotony", f"{monotony:.1f}", help=">2.0 indicates high injury risk due to lack of variation.")
-    
-    # --- INSIGHT CARDS ---
-    st.write("") # Spacer
-    
-    # Fitness Insight
-    fit_trend = "Maintaining"
-    if d_ctl > 2: fit_trend = "Building"
-    elif d_ctl < -2: fit_trend = "Declining"
-    
-    st.info(f"**Fitness (CTL): {fit_trend}**\n\nYour fitness is {fit_trend.lower()} ({d_ctl} change over 7 days). " + 
-            ("Great job building volume!" if d_ctl > 0 else "You might be tapering or recovering."))
-
-    # Fatigue Insight
-    if current['atl'] > current['ctl'] * 1.3:
-         st.warning(f"**High Fatigue Warning**\n\nYour acute load ({int(current['atl'])}) is significantly higher than your fitness ({int(current['ctl'])}). Risk of overuse injury.")
-
-    # Form Insight (The most actionable one)
-    tsb = current['tsb']
-    if tsb < -30:
-        st.error(f"**Form: Overload Warning ({int(tsb)})**\n\nYou are in the 'High Risk' zone. Your fatigue is excessive compared to your fitness. Rest is highly recommended.")
-    elif -30 <= tsb < -10:
-        st.success(f"**Form: Optimal Training ({int(tsb)})**\n\nYou are in the 'Productive' zone. Accumulating fatigue at a sustainable rate to build fitness.")
-    elif -10 <= tsb < 10:
-        st.info(f"**Form: Neutral / Fresh ({int(tsb)})**\n\nYou are in the 'Transition' zone. Good for maintenance or race week tapering.")
-    elif tsb >= 10:
-        st.warning(f"**Form: Detraining Warning ({int(tsb)})**\n\nYou are very fresh, but likely losing fitness. If not tapering for a race, increase training load.")
-
-    # --- Graph: Advanced PMC (Performance Management Chart) ---
-    st.divider()
-    fig = go.Figure()
-    # Chronic Load (Fitness) - Area
-    fig.add_trace(go.Scatter(x=df_ewma['date'], y=df_ewma['ctl'], fill='tozeroy', name='Fitness (CTL)', line=dict(color='rgba(34, 197, 94, 0.5)')))
-    # Acute Load (Fatigue) - Line
-    fig.add_trace(go.Scatter(x=df_ewma['date'], y=df_ewma['atl'], name='Fatigue (ATL)', line=dict(color='#be123c')))
-    # Form (TSB) - Bar/Line? Usually area or separate. Let's keep it clean with just CTL/ATL for now as main focus.
-    
-    fig.update_layout(title="Performance Management Chart (EWMA)", height=350, margin=dict(l=20,r=20,t=40,b=20), hovermode="x unified")
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # --- Dynamic Readiness ---
-    st.divider()
-    st.subheader("Dynamic Readiness (Rolling Baseline)")
-    
-    if len(health) < 7:
-        st.warning("Need at least 7 days of health logs for dynamic baselines.")
-    else:
-        df_h = pd.DataFrame(health)
-        df_h['date'] = pd.to_datetime(df_h['date']).dt.date
-        df_h = df_h.sort_values('date')
-        
-        # Get last 7 days BEFORE today for baseline
-        baseline_window = df_h[df_h['date'] < today].tail(7)
-        if not baseline_window.empty:
-            avg_rhr_7d = baseline_window['rhr'].mean()
-            avg_hrv_7d = baseline_window['hrv'].mean()
-            
-            # Get today's values
-            today_log = df_h[df_h['date'] == today]
-            if not today_log.empty:
-                curr_rhr = today_log.iloc[0]['rhr']
-                curr_hrv = today_log.iloc[0]['hrv']
-                
-                target = engine.get_dynamic_daily_target(curr_rhr, curr_hrv, avg_rhr_7d, avg_7d_hrv=avg_hrv_7d)
-                
-                st.markdown(f"""
-                <div style="background-color: {target['bg']}; padding: 1.5rem; border-radius: 12px; border: 1px solid {target['color']};">
-                    <h3 style="color: {target['color']}; margin:0;">{target['readiness']} Readiness</h3>
-                    <p style="font-weight: bold; margin: 5px 0;">{target['recommendation']}</p>
-                    <p>{target['message']}</p>
-                    <hr style="margin: 10px 0; border-color: {target['color']}; opacity: 0.3;">
-                    <div style="display: flex; justify-content: space-between; font-size: 0.9rem;">
-                        <span><b>Baseline RHR:</b> {avg_rhr_7d:.1f}</span>
-                        <span><b>Baseline HRV:</b> {avg_hrv_7d:.1f}</span>
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-            else:
-                st.info("Log today's health stats to see dynamic readiness.")
 
 def render_cardio():
     st.header(":material/directions_run: Cardio Training")
@@ -1157,10 +1084,9 @@ def render_share():
         opt_ult = c3.checkbox("Ultimate", value=True)
         
         st.markdown("**Data Sections**")
-        c4, c5, c6 = st.columns(3)
+        c4, c6 = st.columns(2)
         opt_health = c4.checkbox("Health Logs", value=True)
-        opt_status = c5.checkbox("Training Status", value=True)
-        opt_adv = c6.checkbox("Adv. Status (EWMA)", value=True)
+        opt_status = c6.checkbox("Training Status", value=True)
         
         st.markdown("**Run Details**")
         c7, c8, c9, c10 = st.columns(4)
@@ -1188,9 +1114,15 @@ def render_share():
         st.divider()
         
         if st.button("📄 Generate Text Report", type="primary"):
+            selected_cats = []
+            if opt_run: selected_cats.append("Run")
+            if opt_walk: selected_cats.append("Walk")
+            if opt_ult: selected_cats.append("Ultimate")
+            if opt_health: selected_cats.append("Stats")
+            
             options = {
                 'run': opt_run, 'walk': opt_walk, 'ultimate': opt_ult,
-                'health': opt_health, 'status': opt_status, 'adv_status': opt_adv,
+                'health': opt_health, 'status': opt_status,
                 'det_physio': det_physio, 'det_adv': det_adv, 'det_zones': det_zones, 'det_notes': det_notes
             }
             report_text = generate_report(start_r, end_r, options)
