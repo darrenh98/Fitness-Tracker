@@ -234,15 +234,6 @@ class PhysiologyEngine:
         else:
             return {"readiness": "Moderate", "recommendation": "Steady State", "target_load": "Maintenance (e.g., Z2)", "message": "Train, but keep controlled.", "color": "#ea580c", "bg": "#ffedd5", "rhr_stat": "Normal", "hrv_stat": "Normal", "sleep_stat": "Normal"}
     
-    def get_dynamic_daily_target(self, current_rhr, current_hrv, avg_7d_rhr, avg_7d_hrv):
-        if not avg_7d_rhr or not avg_7d_hrv: return self.get_daily_target(current_rhr, current_hrv)
-        rhr_z = current_rhr - avg_7d_rhr; hrv_z = current_hrv - avg_7d_hrv
-        is_fatigued = (rhr_z > 3) or (hrv_z < -10)
-        is_prime = (rhr_z < -2) and (hrv_z > -5)
-        if is_fatigued: return {"readiness": "Low", "recommendation": "Recovery / Rest", "target_load": "Light (<40)", "message": f"Fatigue detected vs 7-day trend (RHR +{rhr_z:.1f})", "color": "#be123c", "bg": "#fee2e2"}
-        elif is_prime: return {"readiness": "High", "recommendation": "Intervals / Tempo", "target_load": "Heavy (>120)", "message": "Primed. Stats better than recent avg.", "color": "#65a30d", "bg": "#dcfce7"}
-        else: return {"readiness": "Moderate", "recommendation": "Base / Aerobic", "target_load": "Normal (60-100)", "message": "Stable. Maintain volume.", "color": "#ea580c", "bg": "#ffedd5"}
-
     def get_training_effect(self, trimp_score):
         scaling = self.vo2_max * 1.5
         if scaling == 0: return 0.0, "None"
@@ -335,8 +326,8 @@ class PhysiologyEngine:
 
 # --- Report Generation ---
 def generate_report(start_date, end_date, options):
-    report = [f"Training & Physio Report"]
-    report.append(f"{start_date.strftime('%b %d')} - {end_date.strftime('%b %d')}\n")
+    report = [f"Training Log - {start_date.strftime('%b %d')} to {end_date.strftime('%b %d')}"]
+    report.append("=" * 40)
     engine = PhysiologyEngine(st.session_state.data['user_profile'])
     field_types = []
     if options.get('run'): field_types.append('Run')
@@ -350,6 +341,17 @@ def generate_report(start_date, end_date, options):
     period_runs = [r for r in runs if start_date <= datetime.strptime(r['date'], '%Y-%m-%d').date() <= end_date and r['type'] in field_types]
     period_stats = [s for s in stats if start_date <= datetime.strptime(s['date'], '%Y-%m-%d').date() <= end_date]
     
+    # Calculate Phase based on TSB
+    all_runs = st.session_state.data['runs']
+    df_ewma = engine.calculate_ewma_status(all_runs, reference_date=end_date)
+    phase = "Maintenance"
+    if not df_ewma.empty:
+        tsb = df_ewma.iloc[-1]['tsb']
+        if tsb < -20: phase = "Overloading (High Fatigue)"
+        elif -20 <= tsb < -5: phase = "Productive (Building)"
+        elif -5 <= tsb < 10: phase = "Maintenance / Taper"
+        else: phase = "Recovery / Detraining"
+
     total_dist = sum(r['distance'] for r in period_runs) if period_runs else 0
     total_time = sum(r['duration'] for r in period_runs) if period_runs else 0
     total_elev = sum(r.get('elevation', 0) for r in period_runs) if period_runs else 0
@@ -357,24 +359,26 @@ def generate_report(start_date, end_date, options):
     avg_hrv = sum(s.get('hrv', 0) for s in period_stats) / len(period_stats) if period_stats else 0
     avg_sleep = sum(s.get('sleepHours', 0) for s in period_stats) / len(period_stats) if period_stats else 0
     
-    report.append("-" * 40)
+    report.append(f"Phase: {phase}")
     report.append(f"Total Dist: {total_dist:.1f} km")
     report.append(f"Total Time: {format_duration(total_time)}")
     report.append(f"Total Elev: {total_elev} m")
     if avg_rhr: report.append(f"Avg RHR: {int(avg_rhr)} bpm")
     if avg_hrv: report.append(f"Avg HRV: {int(avg_hrv)} ms")
     if avg_sleep: report.append(f"Avg Sleep: {format_sleep(avg_sleep)}")
-    report.append("-" * 40)
     report.append("")
     
     if field_types and period_runs:
         report.append(f"ACTIVITIES ({len(period_runs)})")
+        report.append("-" * 20)
         period_runs.sort(key=lambda x: x['date'])
         for r in period_runs:
+            d_obj = datetime.strptime(r['date'], '%Y-%m-%d')
+            date_fmt = d_obj.strftime('%a, %b %d')
             zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
             trimp, focus = engine.calculate_trimp(float(r['duration']), int(r.get('avgHr', 0)), zones)
             te, te_label = engine.get_training_effect(trimp)
-            line = f"- {r['date'][5:]}: {r['type']} {r['distance']}km @ {format_duration(r['duration'])}"
+            line = f"{date_fmt}: {r['type']} {r['distance']}km @ {format_duration(r['duration'])}"
             metrics = []
             if r['distance'] > 0 and r['type'] != 'Ultimate': metrics.append(f"{format_pace(r['duration']/r['distance'])}/km")
             if r.get('avgHr') and r['avgHr'] > 0: metrics.append(f"{r['avgHr']}bpm")
@@ -404,44 +408,45 @@ def generate_report(start_date, end_date, options):
                 if notes_parts: details.append(" | ".join(notes_parts))
             if details:
                 for d in details: report.append(f"   {d}")
-        report.append("")
+            report.append("")
 
     if options.get('health') and period_stats:
         report.append(f"HEALTH LOG")
+        report.append("-" * 20)
         period_stats.sort(key=lambda x: x['date'])
         for s in period_stats:
-            date_str = s['date'][5:]
+            d_obj = datetime.strptime(s['date'], '%Y-%m-%d')
+            date_str = d_obj.strftime('%a, %b %d')
             sleep_str = format_sleep(s.get('sleepHours', 0))
             daily_target = engine.get_daily_target(s.get('rhr', 0), s.get('hrv'), s.get('sleepHours', 0))
-            report.append(f"- {date_str}: Sleep: {sleep_str} | RHR {s.get('rhr')} | HRV {s.get('hrv', '-')} | {daily_target['readiness']}")
-    
-    if options.get('status'):
-        all_runs = st.session_state.data['runs']
-        h_data = []
-        for r in all_runs:
-            zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
-            trimp, focus = engine.calculate_trimp(float(r['duration']), int(r.get('avgHr', 0)), zones)
-            h_data.append({'date': r['date'], 'load': trimp, 'focus': focus})
-        status = engine.calculate_training_status(h_data, reference_date=end_date)
+            report.append(f"{date_str}: Sleep: {sleep_str} | RHR {s.get('rhr')} | HRV {s.get('hrv', '-')} | {daily_target['readiness']}")
         report.append("")
-        report.append(f"STATUS (As of {end_date})")
-        report.append(f"State: {status['status']}")
-        report.append(f"ACWR: {status['ratio']} (Acute: {status['acute']} / Chronic: {status['chronic']})")
-        buckets = status['buckets']
-        report.append(f"Focus: Low: {int(buckets['low'])} | High: {int(buckets['high'])} | Anaerobic: {int(buckets['anaerobic'])}")
     
-    if options.get('adv_status'):
-        all_runs = st.session_state.data['runs']
-        df_ewma = engine.calculate_ewma_status(all_runs, reference_date=end_date)
-        if not df_ewma.empty:
+    if options.get('status') or options.get('adv_status'):
+        report.append("STATUS SNAPSHOT")
+        report.append("-" * 20)
+        
+        # Add EWMA if requested
+        if options.get('adv_status') and not df_ewma.empty:
             current = df_ewma.iloc[-1]
             monotony = df_ewma['load'].tail(7).mean() / df_ewma['load'].tail(7).std() if df_ewma['load'].tail(7).std() > 0 else 0
-            report.append("")
-            report.append(f"ADVANCED STATUS (EWMA as of {end_date})")
             report.append(f"Fitness (CTL): {int(current['ctl'])}")
             report.append(f"Fatigue (ATL): {int(current['atl'])}")
             report.append(f"Form (TSB): {int(current['tsb'])}")
-            report.append(f"Monotony (7d): {monotony:.2f}")
+            report.append(f"Monotony: {monotony:.2f}")
+            
+        # Add ACWR if requested
+        if options.get('status'):
+            h_data = []
+            for r in all_runs:
+                zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
+                trimp, focus = engine.calculate_trimp(float(r['duration']), int(r.get('avgHr', 0)), zones)
+                h_data.append({'date': r['date'], 'load': trimp, 'focus': focus})
+            status = engine.calculate_training_status(h_data, reference_date=end_date)
+            
+            report.append(f"ACWR: {status['ratio']} (State: {status['status']})")
+            buckets = status['buckets']
+            report.append(f"Focus: Low {int(buckets['low'])} | High {int(buckets['high'])} | Anaerobic {int(buckets['anaerobic'])}")
 
     return "\n".join(report)
 
