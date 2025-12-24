@@ -234,6 +234,15 @@ class PhysiologyEngine:
         else:
             return {"readiness": "Moderate", "recommendation": "Steady State", "target_load": "Maintenance (e.g., Z2)", "message": "Train, but keep controlled.", "color": "#ea580c", "bg": "#ffedd5", "rhr_stat": "Normal", "hrv_stat": "Normal", "sleep_stat": "Normal"}
     
+    def get_dynamic_daily_target(self, current_rhr, current_hrv, avg_7d_rhr, avg_7d_hrv):
+        if not avg_7d_rhr or not avg_7d_hrv: return self.get_daily_target(current_rhr, current_hrv)
+        rhr_z = current_rhr - avg_7d_rhr; hrv_z = current_hrv - avg_7d_hrv
+        is_fatigued = (rhr_z > 3) or (hrv_z < -10)
+        is_prime = (rhr_z < -2) and (hrv_z > -5)
+        if is_fatigued: return {"readiness": "Low", "recommendation": "Recovery / Rest", "target_load": "Light (<40)", "message": f"Fatigue detected vs 7-day trend (RHR +{rhr_z:.1f})", "color": "#be123c", "bg": "#fee2e2"}
+        elif is_prime: return {"readiness": "High", "recommendation": "Intervals / Tempo", "target_load": "Heavy (>120)", "message": "Primed. Stats better than recent avg.", "color": "#65a30d", "bg": "#dcfce7"}
+        else: return {"readiness": "Moderate", "recommendation": "Base / Aerobic", "target_load": "Normal (60-100)", "message": "Stable. Maintain volume.", "color": "#ea580c", "bg": "#ffedd5"}
+
     def get_training_effect(self, trimp_score):
         scaling = self.vo2_max * 1.5
         if scaling == 0: return 0.0, "None"
@@ -326,8 +335,8 @@ class PhysiologyEngine:
 
 # --- Report Generation ---
 def generate_report(start_date, end_date, options):
-    report = [f"Training Log - {start_date.strftime('%b %d')} to {end_date.strftime('%b %d')}"]
-    report.append("=" * 40)
+    report = [f"Training & Physio Report"]
+    report.append(f"{start_date.strftime('%b %d')} - {end_date.strftime('%b %d')}\n")
     engine = PhysiologyEngine(st.session_state.data['user_profile'])
     field_types = []
     if options.get('run'): field_types.append('Run')
@@ -341,17 +350,6 @@ def generate_report(start_date, end_date, options):
     period_runs = [r for r in runs if start_date <= datetime.strptime(r['date'], '%Y-%m-%d').date() <= end_date and r['type'] in field_types]
     period_stats = [s for s in stats if start_date <= datetime.strptime(s['date'], '%Y-%m-%d').date() <= end_date]
     
-    # Calculate Phase based on TSB
-    all_runs = st.session_state.data['runs']
-    df_ewma = engine.calculate_ewma_status(all_runs, reference_date=end_date)
-    phase = "Maintenance"
-    if not df_ewma.empty:
-        tsb = df_ewma.iloc[-1]['tsb']
-        if tsb < -20: phase = "Overloading (High Fatigue)"
-        elif -20 <= tsb < -5: phase = "Productive (Building)"
-        elif -5 <= tsb < 10: phase = "Maintenance / Taper"
-        else: phase = "Recovery / Detraining"
-
     total_dist = sum(r['distance'] for r in period_runs) if period_runs else 0
     total_time = sum(r['duration'] for r in period_runs) if period_runs else 0
     total_elev = sum(r.get('elevation', 0) for r in period_runs) if period_runs else 0
@@ -359,26 +357,24 @@ def generate_report(start_date, end_date, options):
     avg_hrv = sum(s.get('hrv', 0) for s in period_stats) / len(period_stats) if period_stats else 0
     avg_sleep = sum(s.get('sleepHours', 0) for s in period_stats) / len(period_stats) if period_stats else 0
     
-    report.append(f"Phase: {phase}")
+    report.append("-" * 40)
     report.append(f"Total Dist: {total_dist:.1f} km")
     report.append(f"Total Time: {format_duration(total_time)}")
     report.append(f"Total Elev: {total_elev} m")
     if avg_rhr: report.append(f"Avg RHR: {int(avg_rhr)} bpm")
     if avg_hrv: report.append(f"Avg HRV: {int(avg_hrv)} ms")
     if avg_sleep: report.append(f"Avg Sleep: {format_sleep(avg_sleep)}")
+    report.append("-" * 40)
     report.append("")
     
     if field_types and period_runs:
         report.append(f"ACTIVITIES ({len(period_runs)})")
-        report.append("-" * 20)
         period_runs.sort(key=lambda x: x['date'])
         for r in period_runs:
-            d_obj = datetime.strptime(r['date'], '%Y-%m-%d')
-            date_fmt = d_obj.strftime('%a, %b %d')
             zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
             trimp, focus = engine.calculate_trimp(float(r['duration']), int(r.get('avgHr', 0)), zones)
             te, te_label = engine.get_training_effect(trimp)
-            line = f"{date_fmt}: {r['type']} {r['distance']}km @ {format_duration(r['duration'])}"
+            line = f"- {r['date'][5:]}: {r['type']} {r['distance']}km @ {format_duration(r['duration'])}"
             metrics = []
             if r['distance'] > 0 and r['type'] != 'Ultimate': metrics.append(f"{format_pace(r['duration']/r['distance'])}/km")
             if r.get('avgHr') and r['avgHr'] > 0: metrics.append(f"{r['avgHr']}bpm")
@@ -408,45 +404,53 @@ def generate_report(start_date, end_date, options):
                 if notes_parts: details.append(" | ".join(notes_parts))
             if details:
                 for d in details: report.append(f"   {d}")
-            report.append("")
+        report.append("")
 
     if options.get('health') and period_stats:
         report.append(f"HEALTH LOG")
-        report.append("-" * 20)
         period_stats.sort(key=lambda x: x['date'])
         for s in period_stats:
-            d_obj = datetime.strptime(s['date'], '%Y-%m-%d')
-            date_str = d_obj.strftime('%a, %b %d')
+            date_str = s['date'][5:]
             sleep_str = format_sleep(s.get('sleepHours', 0))
             daily_target = engine.get_daily_target(s.get('rhr', 0), s.get('hrv'), s.get('sleepHours', 0))
-            report.append(f"{date_str}: Sleep: {sleep_str} | RHR {s.get('rhr')} | HRV {s.get('hrv', '-')} | {daily_target['readiness']}")
-        report.append("")
+            report.append(f"- {date_str}: Sleep: {sleep_str} | RHR {s.get('rhr')} | HRV {s.get('hrv', '-')} | {daily_target['readiness']}")
     
-    if options.get('status') or options.get('adv_status'):
-        report.append("STATUS SNAPSHOT")
-        report.append("-" * 20)
-        
-        # Add EWMA if requested
-        if options.get('adv_status') and not df_ewma.empty:
+    if options.get('status'):
+        all_runs = st.session_state.data['runs']
+        h_data = []
+        for r in all_runs:
+            zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
+            trimp, focus = engine.calculate_trimp(float(r['duration']), int(r.get('avgHr', 0)), zones)
+            h_data.append({'date': r['date'], 'load': trimp, 'focus': focus})
+        status = engine.calculate_training_status(h_data, reference_date=end_date)
+        report.append("")
+        report.append(f"STATUS (As of {end_date})")
+        report.append(f"State: {status['status']}")
+        report.append(f"ACWR: {status['ratio']} (Acute: {status['acute']} / Chronic: {status['chronic']})")
+        buckets = status['buckets']
+        report.append(f"Focus: Low: {int(buckets['low'])} | High: {int(buckets['high'])} | Anaerobic: {int(buckets['anaerobic'])}")
+    
+    if options.get('adv_status'):
+        all_runs = st.session_state.data['runs']
+        df_ewma = engine.calculate_ewma_status(all_runs, reference_date=end_date)
+        if not df_ewma.empty:
             current = df_ewma.iloc[-1]
             monotony = df_ewma['load'].tail(7).mean() / df_ewma['load'].tail(7).std() if df_ewma['load'].tail(7).std() > 0 else 0
-            report.append(f"Fitness (CTL): {int(current['ctl'])}")
-            report.append(f"Fatigue (ATL): {int(current['atl'])}")
-            report.append(f"Form (TSB): {int(current['tsb'])}")
-            report.append(f"Monotony: {monotony:.2f}")
             
-        # Add ACWR if requested
-        if options.get('status'):
-            h_data = []
-            for r in all_runs:
-                zones = [float(r.get(f'z{i}', 0)) for i in range(1,6)]
-                trimp, focus = engine.calculate_trimp(float(r['duration']), int(r.get('avgHr', 0)), zones)
-                h_data.append({'date': r['date'], 'load': trimp, 'focus': focus})
-            status = engine.calculate_training_status(h_data, reference_date=end_date)
-            
-            report.append(f"ACWR: {status['ratio']} (State: {status['status']})")
-            buckets = status['buckets']
-            report.append(f"Focus: Low {int(buckets['low'])} | High {int(buckets['high'])} | Anaerobic {int(buckets['anaerobic'])}")
+            # Helper for diff string
+            def get_diff_str(curr_val, metric_key):
+                if len(df_ewma) > 7:
+                    prev = df_ewma.iloc[-8][metric_key]
+                    diff = int(curr_val - prev)
+                    return f" (+{diff} vs 7d ago)" if diff >= 0 else f" ({diff} vs 7d ago)"
+                return ""
+
+            report.append("")
+            report.append(f"ADVANCED STATUS (EWMA as of {end_date})")
+            report.append(f"Fitness (CTL): {int(current['ctl'])}{get_diff_str(current['ctl'], 'ctl')}")
+            report.append(f"Fatigue (ATL): {int(current['atl'])}{get_diff_str(current['atl'], 'atl')}")
+            report.append(f"Form (TSB): {int(current['tsb'])}{get_diff_str(current['tsb'], 'tsb')}")
+            report.append(f"Monotony (7d): {monotony:.2f}")
 
     return "\n".join(report)
 
@@ -490,7 +494,8 @@ def render_sidebar():
             if st.button("Save Profile"):
                 new_prof = {
                     'weight': new_weight, 'height': new_height, 'gender': gender,
-                    'hrMax': hr_max, 'hrRest': m_rhr, 'vo2Max': vo2, 'monthAvgRHR': m_rhr, 'monthAvgHRV': m_hrv,
+                    'hrMax': hr_max, 'hrRest': m_rhr, 'vo2Max': vo2, 
+                    'monthAvgRHR': m_rhr, 'monthAvgHRV': m_hrv,
                     'zones': {"z1_u": z1_u, "z2_l": z2_l, "z2_u": z2_u, "z3_l": z3_l, "z3_u": z3_u, "z4_l": z4_l, "z4_u": z4_u, "z5_l": z5_l}
                 }
                 st.session_state.data['user_profile'].update(new_prof)
@@ -504,19 +509,25 @@ def render_sidebar():
 def render_training_status():
     st.header(":material/monitor_heart: Training Status")
     setup_page()
+    
     with st.container(border=True):
         c_header, c_date = st.columns([3, 2])
         c_header.subheader("☀️ Morning Update")
         h_date = c_date.date_input("Log Date", get_malaysia_time(), label_visibility="collapsed")
         existing_log = next((log for log in st.session_state.data['health_logs'] if log['date'] == str(h_date)), None)
+        
         if 'edit_morning_date' not in st.session_state: st.session_state.edit_morning_date = None
         is_editing = (st.session_state.edit_morning_date == str(h_date))
+        
+        # Calculate deltas for display
         prof = st.session_state.data['user_profile']
         base_rhr = prof.get('monthAvgRHR', 60)
         base_hrv = prof.get('monthAvgHRV', 40)
+        
         if existing_log and not is_editing:
             rhr_diff = existing_log['rhr'] - base_rhr
             hrv_diff = existing_log.get('hrv', 40) - base_hrv
+            
             v1, v2, v3, v4 = st.columns(4)
             v1.metric("Sleep", format_sleep(existing_log['sleepHours']))
             v2.metric("RHR", f"{existing_log['rhr']}", f"{rhr_diff} bpm", delta_color="inverse")
@@ -555,13 +566,30 @@ def render_training_status():
                     st.rerun()
             if is_editing:
                 if st.button("Cancel Edit"): st.session_state.edit_morning_date = None; st.rerun()
+    
         display_log = existing_log if existing_log else (st.session_state.data['health_logs'][0] if st.session_state.data['health_logs'] else None)
         if display_log:
             engine = PhysiologyEngine(st.session_state.data['user_profile'])
             target_data = engine.get_daily_target(display_log['rhr'], display_log.get('hrv', 40), display_log.get('sleepHours', 0))
-            st.markdown(f"""<div class="daily-target" style="border-left: 6px solid {target_data['color']}; background-color: {target_data.get('bg', '#ffffff')};"><div class="target-header"><span style="color: {target_data['color']};">{target_data['readiness']} Readiness</span><span style="font-weight:400; color:#64748b; font-size:0.9rem;">• RHR {display_log['rhr']} (Base {base_rhr})</span></div><div style="font-size: 1.2rem; font-weight:700; color:#1e293b;">{target_data['recommendation']}</div><div class="target-load">Target: {target_data['target_load']}</div><div style="font-size: 0.9rem; color:#475569; font-style:italic;">"{target_data['message']}"</div></div>""", unsafe_allow_html=True)
-    st.divider()
+            
+            st.markdown(f"""
+<div class="daily-target" style="border-left: 6px solid {target_data['color']}; background-color: {target_data.get('bg', '#ffffff')};">
+    <div class="target-header">
+        <span style="color: {target_data['color']};">{target_data['readiness']} Readiness</span>
+    </div>
+    <div style="font-size: 1.2rem; font-weight:700; color:#1e293b;">{target_data['recommendation']}</div>
+    <div class="target-load">Target: {target_data['target_load']}</div>
+    <div style="font-size: 0.9rem; color:#475569; font-style:italic; margin-bottom:10px;">"{target_data['message']}"</div>
+    <div class="bio-row">
+        <div class="bio-item"><b>RHR:</b> {display_log['rhr']} <span style="font-size:0.75em">({target_data['rhr_stat']})</span></div>
+        <div class="bio-item"><b>HRV:</b> {display_log.get('hrv', '-')} <span style="font-size:0.75em">({target_data['hrv_stat']})</span></div>
+        <div class="bio-item"><b>Sleep:</b> {format_sleep(display_log['sleepHours'])} <span style="font-size:0.75em">({target_data['sleep_stat']})</span></div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
+    st.divider()
+    
     # --- EWMA Status Section ---
     st.subheader("Performance Management (EWMA)")
     
