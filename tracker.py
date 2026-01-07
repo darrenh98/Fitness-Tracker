@@ -95,6 +95,7 @@ def load_data():
         for doc in runs_ref:
             r = doc.to_dict(); r['id'] = doc.id; data["runs"].append(r)
         
+        # Legacy gym logs support
         gym_ref = db.collection("gym_logs").stream()
         for doc in gym_ref:
             g = doc.to_dict(); g['id'] = doc.id; data["gym_logs"].append(g)
@@ -243,7 +244,7 @@ class PhysiologyEngine:
             return {"readiness": "Low", "recommendation": "Active Recovery", "target_load": "Recovery (e.g., 30m easy)", "message": "Red light. Focus on sleep.", "color": "#be123c", "bg": "#fee2e2", "rhr_stat": "High", "hrv_stat": "Low", "sleep_stat": "Poor"}
         else:
             return {"readiness": "Moderate", "recommendation": "Steady State", "target_load": "Maintenance (e.g., Z2)", "message": "Train, but keep controlled.", "color": "#ea580c", "bg": "#ffedd5", "rhr_stat": "Normal", "hrv_stat": "Normal", "sleep_stat": "Normal"}
-    
+
     def get_training_effect(self, trimp_score):
         scaling = self.vo2_max * 1.5
         if scaling == 0: return 0.0, "None"
@@ -570,7 +571,6 @@ def render_training_status():
         if display_log:
             engine = PhysiologyEngine(st.session_state.data['user_profile'])
             target_data = engine.get_daily_target(display_log['rhr'], display_log.get('hrv', 40), display_log.get('sleepHours', 0))
-            
             st.markdown(f"""
 <div class="daily-target" style="border-left: 6px solid {target_data['color']}; background-color: {target_data.get('bg', '#ffffff')};">
     <div class="target-header">
@@ -821,16 +821,13 @@ def render_cardio():
                     st.caption("Avg HR (Optional)")
                     hr = st.number_input("Avg HR", min_value=0, value=int(def_hr), label_visibility="collapsed", key=f"hr_{key_suffix}")
                 
-                st.caption("Workout Details")
-                notes = st.text_area("Exercises, Sets, Reps", value=def_notes, height=100, label_visibility="collapsed", key=f"notes_{key_suffix}")
+                c_g2 = st.columns(1) # Notes
                 
                 # Defaults for hidden fields
                 dist = 0.0
                 cadence = 0
                 power = 0
                 elev = 0
-                feel = "Normal"
-                z1=z2=z3=z4=z5=""
                 
             else: # Run/Walk/Ultimate
                 c1, c2 = st.columns(2)
@@ -863,19 +860,18 @@ def render_cardio():
                 with c_g2:
                     st.write("") 
 
-                st.caption("Heart Rate Zones (Time in mm:ss)")
-                rc1, rc2, rc3, rc4, rc5 = st.columns(5)
-                z1 = rc1.text_input("Zone 1", value=def_z1, placeholder="00:00", key=f"z1_{key_suffix}")
-                z2 = rc2.text_input("Zone 2", value=def_z2, placeholder="00:00", key=f"z2_{key_suffix}")
-                z3 = rc3.text_input("Zone 3", value=def_z3, placeholder="00:00", key=f"z3_{key_suffix}")
-                z4 = rc4.text_input("Zone 4", value=def_z4, placeholder="00:00", key=f"z4_{key_suffix}")
-                z5 = rc5.text_input("Zone 5", value=def_z5, placeholder="00:00", key=f"z5_{key_suffix}")
-                st.caption("How did it feel?")
-                feel_idx = ["Good", "Normal", "Tired", "Pain"].index(def_feel) if def_feel in ["Good", "Normal", "Tired", "Pain"] else 1
-                feel = st.radio("Feel", ["Good", "Normal", "Tired", "Pain"], index=feel_idx, horizontal=True, label_visibility="collapsed", key=f"feel_{key_suffix}")
-                st.caption("Notes")
-                notes = st.text_area("Notes", value=def_notes, placeholder="Easy run, felt strong...", height=3, label_visibility="collapsed", key=f"notes_{key_suffix}")
-            
+            st.caption("Heart Rate Zones (Time in mm:ss)")
+            rc1, rc2, rc3, rc4, rc5 = st.columns(5)
+            z1 = rc1.text_input("Zone 1", value=def_z1, placeholder="00:00", key=f"z1_{key_suffix}")
+            z2 = rc2.text_input("Zone 2", value=def_z2, placeholder="00:00", key=f"z2_{key_suffix}")
+            z3 = rc3.text_input("Zone 3", value=def_z3, placeholder="00:00", key=f"z3_{key_suffix}")
+            z4 = rc4.text_input("Zone 4", value=def_z4, placeholder="00:00", key=f"z4_{key_suffix}")
+            z5 = rc5.text_input("Zone 5", value=def_z5, placeholder="00:00", key=f"z5_{key_suffix}")
+            st.caption("How did it feel?")
+            feel_idx = ["Good", "Normal", "Tired", "Pain"].index(def_feel) if def_feel in ["Good", "Normal", "Tired", "Pain"] else 1
+            feel = st.radio("Feel", ["Good", "Normal", "Tired", "Pain"], index=feel_idx, horizontal=True, label_visibility="collapsed", key=f"feel_{key_suffix}")
+            st.caption("Notes")
+            notes = st.text_area("Notes", value=def_notes, placeholder="Easy run, felt strong...", height=3, label_visibility="collapsed", key=f"notes_{key_suffix}")
             if st.form_submit_button("Update Activity" if edit_run_id else "Save Activity"):
                 new_id = str(int(time.time()))
                 doc_id = str(edit_run_id) if edit_run_id else new_id
@@ -1054,18 +1050,10 @@ def render_trends():
     year = st.session_state.cal_date.year
     month = st.session_state.cal_date.month
     
-    # Combine Runs + Gym for Calendar
     runs = st.session_state.data['runs']
-    gym_logs = st.session_state.data.get('gym_logs', [])
-    all_activities = copy.deepcopy(runs)
-    for g in gym_logs:
-         g_mapped = g.copy()
-         g_mapped['type'] = 'Gym'
-         all_activities.append(g_mapped)
-         
-    df_acts = pd.DataFrame(all_activities)
-    if not df_acts.empty:
-        df_acts['date_dt'] = pd.to_datetime(df_acts['date']).dt.date
+    runs_df = pd.DataFrame(runs)
+    if not runs_df.empty:
+        runs_df['date_dt'] = pd.to_datetime(runs_df['date']).dt.date
     
     # Calendar Generation (Full Weeks)
     cal = calendar.Calendar(firstweekday=0).monthdatescalendar(year, month)
@@ -1090,10 +1078,10 @@ def render_trends():
         
         for i, current_date in enumerate(week):
             with cols[i]:
-                # Check for activities
-                day_acts = []
-                if not df_acts.empty:
-                    day_acts = df_acts[df_acts['date_dt'] == current_date]
+                # Check for runs
+                day_runs = []
+                if not runs_df.empty:
+                    day_runs = runs_df[runs_df['date_dt'] == current_date]
                 
                 # Visual distinction
                 is_current_month = current_date.month == month
@@ -1107,28 +1095,22 @@ def render_trends():
                     else:
                         st.markdown(f"<div style='{text_color}; font-size:0.9em; font-weight:{'600' if is_current_month else '400'}'>{current_date.day}</div>", unsafe_allow_html=True)
                     
-                    # Spacer
+                    # Spacer to ensure minimum height
                     st.markdown("""<div style="height:30px"></div>""", unsafe_allow_html=True)
                     
-                    if not day_acts.empty:
-                         for _, r in day_acts.iterrows():
-                            # Icons
-                            icon = "directions_run"
-                            if r['type'] == "Walk": icon = "directions_walk"
-                            elif r['type'] == "Ultimate": icon = "sports_handball"
-                            elif r['type'] == "Gym": icon = "fitness_center"
-                            
-                            val_display = f"{r['distance']}k" if r.get('distance') else f"{int(r['duration'])}m"
-                            
+                    if not day_runs.empty:
+                         for _, r in day_runs.iterrows():
+                            # Minimal display: Icon + Dist
+                            icon = "directions_run" if r['type'] == "Run" else "directions_walk" if r['type'] == "Walk" else "sports_handball"
                             st.markdown(f"""
                             <div class="cal-activity">
                                 <span class="material-symbols-rounded" style="font-size:14px">{icon}</span>
-                                <span style="font-size:0.75rem; font-weight:600;">{val_display}</span>
+                                <span style="font-size:0.75rem; font-weight:600;">{r['distance']}k</span>
                             </div>
                             """, unsafe_allow_html=True)
                             
                             # Add to totals
-                            w_dist += r.get('distance', 0)
+                            w_dist += r['distance']
                             w_time += r['duration']
                             w_elev += r.get('elevation', 0)
                             w_count += 1
@@ -1164,9 +1146,10 @@ def render_share():
         opt_ult = c3.checkbox("Ultimate", value=True)
         
         st.markdown("**Data Sections**")
-        c4, c6 = st.columns(2)
+        c4, c5, c6 = st.columns(3)
         opt_health = c4.checkbox("Health Logs", value=True)
-        opt_status = c6.checkbox("Training Status", value=True)
+        opt_status = c5.checkbox("Training Status", value=True)
+        opt_adv = c6.checkbox("Adv. Status (EWMA)", value=True)
         
         st.markdown("**Run Details**")
         c7, c8, c9, c10 = st.columns(4)
@@ -1202,7 +1185,7 @@ def render_share():
             
             options = {
                 'run': opt_run, 'walk': opt_walk, 'ultimate': opt_ult,
-                'health': opt_health, 'status': opt_status,
+                'health': opt_health, 'status': opt_status, 'adv_status': opt_adv,
                 'det_physio': det_physio, 'det_adv': det_adv, 'det_zones': det_zones, 'det_notes': det_notes
             }
             report_text = generate_report(start_r, end_r, options)
