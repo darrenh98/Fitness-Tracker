@@ -197,8 +197,6 @@ class PhysiologyEngine:
     def calculate_trimp(self, duration_min, avg_hr=None, zones=None, rpe=None):
         load = 0.0
         focus_scores = {'low': 0, 'high': 0, 'anaerobic': 0}
-        
-        # 1. Zone-based Calculation
         if zones and len(self.zones) > 0 and sum(zones) > 0:
             z1_mid = (self.hr_rest + float(self.zones.get('z1_u', 130))) / 2
             z2_mid = (float(self.zones.get('z2_l', 131)) + float(self.zones.get('z2_u', 145))) / 2
@@ -216,8 +214,6 @@ class PhysiologyEngine:
                 if i <= 1: focus_scores['low'] += segment_load
                 elif i <= 3: focus_scores['high'] += segment_load
                 else: focus_scores['anaerobic'] += segment_load
-        
-        # 2. Avg HR Calculation
         elif avg_hr and avg_hr > 0:
             hr_reserve = max(0.0, min(1.0, (avg_hr - self.hr_rest) / (self.hr_max - self.hr_rest)))
             exponent = 1.92 if self.gender == 'male' else 1.67
@@ -227,9 +223,8 @@ class PhysiologyEngine:
             elif avg_hr > z2_upper: focus_scores['high'] = load
             else: focus_scores['low'] = load
         
-        # 3. RPE Calculation (Fallback)
         if load == 0 and rpe and rpe > 0:
-             load = duration_min * rpe * 0.3 # Reduced scalar for simple RPE
+             load = duration_min * rpe * 0.3
              if rpe >= 8: focus_scores['anaerobic'] = load
              elif rpe >= 6: focus_scores['high'] = load
              else: focus_scores['low'] = load
@@ -244,6 +239,15 @@ class PhysiologyEngine:
             return {"readiness": "Low", "recommendation": "Active Recovery", "target_load": "Recovery (e.g., 30m easy)", "message": "Red light. Focus on sleep.", "color": "#be123c", "bg": "#fee2e2", "rhr_stat": "High", "hrv_stat": "Low", "sleep_stat": "Poor"}
         else:
             return {"readiness": "Moderate", "recommendation": "Steady State", "target_load": "Maintenance (e.g., Z2)", "message": "Train, but keep controlled.", "color": "#ea580c", "bg": "#ffedd5", "rhr_stat": "Normal", "hrv_stat": "Normal", "sleep_stat": "Normal"}
+    
+    def get_dynamic_daily_target(self, current_rhr, current_hrv, avg_7d_rhr, avg_7d_hrv):
+        if not avg_7d_rhr or not avg_7d_hrv: return self.get_daily_target(current_rhr, current_hrv)
+        rhr_z = current_rhr - avg_7d_rhr; hrv_z = current_hrv - avg_7d_hrv
+        is_fatigued = (rhr_z > 3) or (hrv_z < -10)
+        is_prime = (rhr_z < -2) and (hrv_z > -5)
+        if is_fatigued: return {"readiness": "Low", "recommendation": "Recovery / Rest", "target_load": "Light (<40)", "message": f"Fatigue detected vs 7-day trend (RHR +{rhr_z:.1f})", "color": "#be123c", "bg": "#fee2e2"}
+        elif is_prime: return {"readiness": "High", "recommendation": "Intervals / Tempo", "target_load": "Heavy (>120)", "message": "Primed. Stats better than recent avg.", "color": "#65a30d", "bg": "#dcfce7"}
+        else: return {"readiness": "Moderate", "recommendation": "Base / Aerobic", "target_load": "Normal (60-100)", "message": "Stable. Maintain volume.", "color": "#ea580c", "bg": "#ffedd5"}
 
     def get_training_effect(self, trimp_score):
         scaling = self.vo2_max * 1.5
@@ -390,7 +394,7 @@ def generate_report(start_date, end_date, options):
             metrics = []
             if r.get('distance', 0) > 0 and r['type'] != 'Ultimate': metrics.append(f"{format_pace(r['duration']/r['distance'])}/km")
             if r.get('avgHr') and r['avgHr'] > 0: metrics.append(f"{r['avgHr']}bpm")
-            if metrics: line += f" ({', '.join(metrics)})"
+            line += f" ({', '.join(metrics)})" if metrics else ""
             report.append(line)
             details = []
             if options.get('det_physio'):
@@ -571,6 +575,7 @@ def render_training_status():
         if display_log:
             engine = PhysiologyEngine(st.session_state.data['user_profile'])
             target_data = engine.get_daily_target(display_log['rhr'], display_log.get('hrv', 40), display_log.get('sleepHours', 0))
+            
             st.markdown(f"""
 <div class="daily-target" style="border-left: 6px solid {target_data['color']}; background-color: {target_data.get('bg', '#ffffff')};">
     <div class="target-header">
